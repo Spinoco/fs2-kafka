@@ -25,24 +25,26 @@ lazy val commonSettings = Seq(
    scalacOptions in (Compile, console) ~= {_.filterNot("-Ywarn-unused-import" == _)},
    scalacOptions in (Test, console) <<= (scalacOptions in (Compile, console)),
    libraryDependencies ++= Seq(
-      "org.scalatest" %% "scalatest" % "3.0.0-M16-SNAP4" % "test"
+      "org.scalatest" %% "scalatest" % "3.0.0" % "test"
       , "org.scalacheck" %% "scalacheck" % "1.13.1" % "test"
 
-      , "org.apache.kafka" %% "kafka" % "0.9.0.1"
-      //, "org.slf4j" % "slf4j-simple" % "1.6.1" % "test" // uncomment this for logs when testing
+     // , "ch.qos.logback" % "logback-classic" % "1.1.7"
+     // , "org.slf4j" % "slf4j-simple" % "1.6.1" % "test" // uncomment this for logs when testing
 
-      , "co.fs2" %% "fs2-core" % "0.9.0-SNAPSHOT"
-      , "co.fs2" %% "fs2-io" % "0.9.0-SNAPSHOT"
-      , "com.spinoco" %% "fs2-zk" % "0.1.0-SNAPSHOT"
-      , "org.scodec" %% "scodec-core" % "1.9.0"
+      , "co.fs2" %% "fs2-core" % "0.9.1"
+      , "co.fs2" %% "fs2-io" % "0.9.1"
+
+      , "com.spinoco" %% "protocol-kafka" % "0.1.0-SNAPSHOT"
+
+
    ),
-   scmInfo := Some(ScmInfo(url("https://github.com/Spinoco/fs2-zk"), "git@github.com:Spinoco/fs2-zk.git")),
+   scmInfo := Some(ScmInfo(url("https://github.com/Spinoco/fs2-zk"), "git@github.com:Spinoco/fs2-kafka.git")),
    homepage := None,
    licenses += ("MIT", url("http://opensource.org/licenses/MIT")),
    initialCommands := s"""
     import fs2._
     import fs2.util._
-    import spinoco.fs2.zk._
+    import spinoco.fs2.kafka._
   """
 ) ++ testSettings ++ scaladocSettings ++ publishingSettings ++ releaseSettings
 
