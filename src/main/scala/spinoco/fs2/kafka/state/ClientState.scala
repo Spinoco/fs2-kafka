@@ -29,7 +29,7 @@ object ClientState {
     brokers = Map.empty
     , topics = Map.empty
     , terminated = false
-    , generation = tag[BrokerGeneration](0)
+    , generation = tag[BrokerGeneration](0l)
   )
 
 }

@@ -2,6 +2,7 @@ package spinoco.fs2.kafka
 
 import java.net.InetSocketAddress
 import java.nio.channels.AsynchronousChannelGroup
+import java.time.LocalDate
 import java.util.concurrent.atomic.AtomicInteger
 
 import fs2._
@@ -9,12 +10,14 @@ import fs2.util.Async
 import fs2.async.mutable.Signal
 import Stream.eval
 import fs2.Chunk.Bytes
-import fs2.util.Async.Change
-import shapeless.{:+:, CNil, tag}
+import scodec.bits.ByteVector
+import shapeless.tag
 import shapeless.tag._
 import spinoco.fs2.kafka.network.BrokerConnection
+import spinoco.fs2.kafka.state.BrokerState.Connected
 import spinoco.fs2.kafka.state._
-import spinoco.protocol.kafka.Request.{MetadataRequest, ProduceRequest}
+import spinoco.protocol.kafka.Message.SingleMessage
+import spinoco.protocol.kafka.Request.{MetadataRequest, ProduceRequest, RequiredAcks}
 import spinoco.protocol.kafka._
 import spinoco.protocol.kafka.Response.{MetadataResponse, ProduceResponse}
 
@@ -181,8 +184,8 @@ object KafkaClient {
       case Some(meta) =>
         eval(state.set(impl.updateMetadata(ClientState.initial[F],meta))).flatMap { _ =>
           concurrent.join(Int.MaxValue)(Stream(
-            impl.controller(state,impl.controlConnection(state,brokerConnection,brokerRetryDelay,protocol,brokerControlQueueBound))
-            , impl.metadataRefresher(???, state, ???)
+            impl.controller(state,impl.controlConnection(state,brokerConnection,brokerRetryDelay,protocol,brokerControlQueueBound, clientName))
+            , impl.metadataRefresher(impl.initialMetadata(ensemble,protocol,clientName,brokerConnection), state, 1.minute)
             , Stream.eval(impl.mkClient(state))
           ))
         }
@@ -199,12 +202,56 @@ object KafkaClient {
     )(implicit F: Async[F]):F[KafkaClient[F]] = F.delay {
       new KafkaClient[F] {
         def subscribe(topic: String, partition: Int, offset: Long, maxQueue: Int, followTail: Boolean): Stream[F, TopicMessage] = ???
-        def publish1(topic: String, partition: Int, key: Bytes, message: Bytes, requireQuorum: Boolean, serverAckTimeout: FiniteDuration): F[Option[Long]] = ???
+        def publish1(topic: String, partition: Int, key: Bytes, message: Bytes, requireQuorum: Boolean, serverAckTimeout: FiniteDuration): F[Option[Long]] = _publishOne(signal, tag[TopicName](topic), tag[PartitionId](partition), key, message, requireQuorum, serverAckTimeout)
         def publishUnsafe1(topic: String, partition: Int, key: Bytes, message: Bytes): F[Unit] = ???
         def publishN[A](messages: Chunk[(String, Int, Bytes, Bytes, A)], requireQuorum: Boolean, serverAckTimeout: FiniteDuration, compress: Option[_root_.spinoco.fs2.kafka.Compression.Value]): F[Chunk[(A, Long)]] = ???
         def publishUnsafeN(messages: Chunk[(String, Int, Bytes, Bytes)], compress: Option[_root_.spinoco.fs2.kafka.Compression.Value]): F[Unit] = ???
         def topics: Stream[F, Map[String, Set[Int]]] = ???
         def refreshTopology: F[Unit] = ???
+      }
+    }
+
+
+    def _publishOne[F[_]](
+      signal: Signal[F,ClientState[F]]
+      , topic: String @@ TopicName
+      , partition: Int @@ PartitionId
+      , key: Bytes
+      , message: Bytes
+      , requireQuorum: Boolean
+      , serverAckTimeout: FiniteDuration
+    )(implicit F: Async[F]): F[Option[Long]] = {
+      F.flatMap(signal.get){v =>
+        v.topics.get((topic, partition)).flatMap{_.leader}.flatMap(v.brokers.get) match {
+          case Some(conn: Connected[F]) =>
+
+            val msg =
+              SingleMessage(
+                offset = 0 //This is ignored for producer
+                , version = MessageVersion.V0
+                , timeStamp = None //None for producer
+                , key = ByteVector(key.values)
+                , value = ByteVector(message.values)
+              )
+
+            val reqAck =
+              if(requireQuorum) RequiredAcks.Quorum
+              else RequiredAcks.LocalOnly
+
+            val req =
+              ProduceRequest(
+                reqAck
+                , serverAckTimeout
+                , Vector((topic, Vector((partition, Vector(msg)))))
+              )
+
+            F.map(conn.produce(req)){
+              _.flatMap(_.data.find(_._1 == topic).flatMap(_._2.find(_._1 == partition).map(_._2.offset)))
+            }
+
+
+          case _ => F.pure(None)
+        }
       }
     }
 
@@ -316,22 +363,100 @@ object KafkaClient {
     )(
       id: Int @@ Broker
       , address: BrokerAddress
-    )(implicit F: Async[F], Logger: Logger[F]):Stream[F,Nothing] = {
+    )(implicit F: Async[F], Logger: Logger[F], S:Scheduler):Stream[F,Nothing] = {
       import BrokerState._
       type ControlRequest =
-        Either[(MetadataRequest, Async.Ref[F,MetadataResponse]),(ProduceRequest, Async.Ref[F,ProduceResponse])]
+        Either[(MetadataRequest, Async.Ref[F, Option[MetadataResponse]]),(ProduceRequest, Async.Ref[F, Option[ProduceResponse]])]
 
-      def brokerInstanceGone:Stream[F,Boolean] = ???
+      def brokerInstanceGone:Stream[F,Boolean] =
+        signal.discrete.map(!_.brokers.contains(id))
 
+      def produce(enqueue: ((ProduceRequest, Async.Ref[F, Option[ProduceResponse]])) => F[Unit])(req: ProduceRequest): F[Option[ProduceResponse]] =
+        F.flatMap(Async.ref[F, Option[ProduceResponse]]){ref =>
+        F.flatMap(enqueue((req, ref))){_ =>
+          ref.get
+        }}
+
+      def getMetadata(enqueue: ((MetadataRequest, Async.Ref[F,Option[MetadataResponse]])) => F[Unit]): F[Option[MetadataResponse]] =
+        F.flatMap(Async.ref[F, Option[MetadataResponse]]){ref =>
+        F.flatMap(signal.get)(cs =>
+        F.flatMap(enqueue((MetadataRequest(cs.topics.map(_._1._1).toVector), ref))){ _ =>
+          ref.get
+        })}
 
       Stream.eval(async.boundedQueue[F,ControlRequest](queueBound)).flatMap { incomingQ =>
       Stream.eval(async.signalOf(Map[Int,ControlRequest]())).flatMap { open =>
         val clientId = clientName + "-control"
 
-        def connectAndProcess:Stream[F,Nothing] = ???
-        def updateError(err:Throwable):Stream[F,Failed[F]] = ???
-        def sleepRetry(f:Failed[F]):Stream[F,Nothing] = ???
-        def failOpened(f:Failed[F]):Stream[F,Nothing] = ???
+        def connectAndProcess:Stream[F,Nothing] = {
+          val idx = new AtomicInteger(0)
+          Stream.eval(
+            F.delay(brokerConnection(new InetSocketAddress(address.host, address.port)))
+          ).flatMap{ connection =>
+            Stream.eval_{
+              signal.modify{state =>
+                state.copy(brokers =
+                  state.brokers + (id ->
+                    Connected(
+                      id
+                      , address
+                      , getMetadata(incomingQ.enqueue1 _ compose(Left(_)))
+                      , produce(incomingQ.enqueue1 _ compose(Right(_)))
+                      , 0
+                    )
+                  )
+                )
+              }
+            }.flatMap{_ =>
+              incomingQ.dequeue.flatMap{ req =>
+                val rIdx = idx.getAndIncrement()
+                Stream.eval_(open.modify(_ + (rIdx -> req))) ++
+                  Stream.emit(RequestMessage(protocol, rIdx, clientId, req.fold(_._1, _._1)))
+              }.through(connection)
+            }
+          }.flatMap{response =>
+            Stream.eval(open.get)
+            .collectFirst{case v => v.get(response.correlationId)}
+            .flatMap{
+              case None => Stream.empty
+              case Some(cReq) =>
+                cReq match {
+                  case Left((_, ref)) =>
+                    response.response match {
+                      case resp: MetadataResponse => Stream.eval_(ref.setPure(Some(resp)))
+                      case _ => Stream.empty
+                    }
+
+                  case Right((_, ref)) =>
+                    response.response match {
+                      case resp: ProduceResponse => Stream.eval_(ref.setPure(Some(resp)))
+                      case _ => Stream.empty
+                    }
+                }
+            }
+          }
+        }
+
+        def updateError(err:Throwable):Stream[F,Failed[F]] = {
+          Stream.eval_(
+            signal.modify{cs =>
+              val failed =
+                cs.brokers.get(id).map{
+                  case failed: Failed[F] => failed.failures + 1
+                  case _ => 1
+                }.getOrElse(1)
+
+              cs.copy(brokers = cs.brokers + (id -> Failed(id, address, LocalDate.now(), failed)))
+            }
+          )
+        }
+
+        def sleepRetry(f:Failed[F]):Stream[F,Nothing] = time.sleep(retryTimeout)
+
+        def failOpened(f:Failed[F]):Stream[F,Nothing] = {
+          Stream.eval(open.get).flatMap{rqs => Stream.emits(rqs.values.toSeq)}
+          .flatMap(rq => Stream.eval_(rq.fold(_._2.setPure(None), _._2.setPure(None))))
+        }
 
         def go:Stream[F,Nothing] = {
           connectAndProcess
@@ -494,7 +619,7 @@ object KafkaClient {
            }.flatMap { meta =>
              Stream.eval(signal.modify(updateMetadata(_, meta))).flatMap { change =>
                if (change.previous == change.now ) Stream.empty
-               else Stream.eval_(logStateChanges(change, meta))
+               else logStateChanges(change.now, meta)
              }
            }
          }
