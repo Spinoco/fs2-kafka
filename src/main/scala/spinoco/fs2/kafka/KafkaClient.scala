@@ -161,6 +161,7 @@ object KafkaClient {
     * @param brokerReadMaxChunkSize   Max size of chunk that is read in single tcp operation from broker
     * @param brokerRetryDelay         Delay between broker reconnects if the connection to the broker failed.
     * @param brokerControlQueueBound  Max number of unprocessed messages to keep for broker, before stopping accepting new messages for broker.
+    * @param clientTopologyRefresh    The periodic interval at which we refresh the known topology
     * @see [[spinoco.fs2.kafka.client]]
     */
   def apply[F[_]](
@@ -171,6 +172,7 @@ object KafkaClient {
     , brokerReadMaxChunkSize: Int = 256 * 1024
     , brokerRetryDelay: FiniteDuration = 10.seconds
     , brokerControlQueueBound: Int = 10 * 1000
+    , clientTopologyRefresh: FiniteDuration = 30.minutes
   )(implicit AG: AsynchronousChannelGroup, F: Async[F], S:Scheduler, Logger:Logger[F]):Stream[F,KafkaClient[F]] = {
     def brokerConnection(addr:InetSocketAddress):Pipe[F,RequestMessage,ResponseMessage] =
       BrokerConnection(addr, brokerWriteTimeout, brokerReadMaxChunkSize)
@@ -183,7 +185,7 @@ object KafkaClient {
         eval(state.set(impl.updateMetadata(ClientState.initial[F],meta))).flatMap { _ =>
           concurrent.join(Int.MaxValue)(Stream(
             impl.controller(state,impl.controlConnection(state,brokerConnection,brokerRetryDelay,protocol,brokerControlQueueBound, clientName))
-            , impl.metadataRefresher(impl.initialMetadata(ensemble,protocol,clientName,brokerConnection), state, 1.minute)
+            , impl.metadataRefresher(impl.initialMetadata(ensemble,protocol,clientName,brokerConnection), state, clientTopologyRefresh)
             , Stream.eval(impl.mkClient(state))
           ))
         }
@@ -210,6 +212,19 @@ object KafkaClient {
     }
 
 
+    /**
+      * Implementation of publishing one message into given topic and partition.
+      * Awaits an answer, it returns the offset of said message, or none
+      * in case the publish failed
+      *
+      * @param signal           The signal of this client
+      * @param topic            The destination topic for this publish
+      * @param partition        The destination partition for this publish
+      * @param key              The key of the message
+      * @param message          The content of the message
+      * @param requireQuorum    The required response from the server
+      * @param serverAckTimeout The maximum time for ack from the server
+      */
     def _publish1[F[_]](
       signal: Signal[F,ClientState[F]]
       , topic: String @@ TopicName
@@ -238,6 +253,16 @@ object KafkaClient {
       }
     }
 
+    /**
+      * Implementation of publishing one message into given topic and partition.
+      * Does not await response from server
+      *
+      * @param signal           The signal of this client
+      * @param topic            The destination topic for this publish
+      * @param partition        The destination partition for this publish
+      * @param key              The key of the message
+      * @param message          The content of the message
+      */
     def _publishUnsafe1[F[_]](
       signal: Signal[F,ClientState[F]]
       , topic: String @@ TopicName
@@ -258,7 +283,16 @@ object KafkaClient {
       ){_ => ()}
     }
 
-
+    /**
+      * Implementation of publishing multiple messages into multiple topics and partitions.
+      * Awaits an answer.
+      *
+      * @param messages           The messages to be send
+      * @param compress           Whether the messages should be compressed
+      * @param requireQuorum      Whether requires quorum confirmation
+      * @param serverAckTimeout   The maximum ack timeout for the server
+      * @param signal             The signal of this client
+      */
     def _publishN[F[_], A](
       messages: Chunk[(String, Int, Bytes, Bytes, A)]
       , compress: Option[Compression.Value]
@@ -290,7 +324,14 @@ object KafkaClient {
       }
     }
 
-
+    /**
+      * Implementation of publishing multiple messages into multiple topics and partitions.
+      * Does not await an answer.
+      *
+      * @param messages           The messages to be send
+      * @param compress           Whether the messages should be compressed
+      * @param signal             The signal of this client
+      */
     def _publishUnsafeN[F[_]](
       messages: Chunk[(String, Int, Bytes, Bytes)]
       , compress: Option[Compression.Value]
@@ -307,7 +348,21 @@ object KafkaClient {
       ){_ => ()}
     }
 
-
+    /**
+      * Implementation for both publish ones.
+      *
+      * Gets a leader for the partition, by consulting the state, in case
+      * the leader in mid election it awaits the it finishing or in case
+      * the broker is still connecting then we await connection
+      *
+      * @param signal           The signal of this client
+      * @param topic            The destination topic for this publish
+      * @param partition        The destination partition for this publish
+      * @param key              The key of the message
+      * @param message          The content of the message
+      * @param ack              The type of the ack this publish requires
+      * @param serverAckTimeout The maximum time for ack from the server
+      */
     def _publishOne[F[_]](
       signal: Signal[F,ClientState[F]]
       , topic: String @@ TopicName
@@ -329,7 +384,7 @@ object KafkaClient {
 
           val msg =
             SingleMessage(
-              offset = 0 //This is ignored for producer of single message
+              offset = 0 //This is ignored for producer
               , version = MessageVersion.V0
               , timeStamp = None //None for producer
               , key = ByteVector(key.values)
@@ -347,11 +402,19 @@ object KafkaClient {
       }
     }
 
+    /**
+      * Groups messages by topic and partition, creates compression message in case
+      * it is required
+      *
+      * @param messages     The messages to be grouped
+      * @param compression  Whether compression is required if so what type
+      */
     def createMessages(messages: Chunk[(String, Int, Bytes, Bytes)], compression: Option[Compression.Value]): Vector[((String @@ TopicName, Int @@ PartitionId), Vector[Message])] = {
+      /** Creates single messages **/
       def makeSingles(messages: Vector[(String, Int, Bytes, Bytes)]): Vector[Message] = {
         messages.map{ case (_, _, key, message) =>
           SingleMessage(
-            offset = 0 //This is ignored for producer of single message
+            offset = 0 //This is ignored for producer
             , version = MessageVersion.V0
             , timeStamp = None //None for producer
             , key = ByteVector(key.values)
@@ -360,12 +423,13 @@ object KafkaClient {
         }
       }
 
+      /** Creates compressed message **/
       def makeCompressed(messages: Vector[(String, Int, Bytes, Bytes)])(compression: Compression.Value): CompressedMessages = {
         CompressedMessages(
-          offset = 0
+          offset = 0 //This is ignored for producer
           , version = MessageVersion.V0
           , compression = compression
-          , timeStamp = None
+          , timeStamp = None //None for producer
           , messages = makeSingles(messages)
         )
       }
@@ -379,6 +443,14 @@ object KafkaClient {
       }.toVector
     }
 
+    /**
+      * Publishes messages to leaders for given topic and partition
+      *
+      * @param timeout    The server timeout for response
+      * @param messages   The messages to be published
+      * @param ack        The required ack from the server
+      * @param signal     The signal of this client
+      */
     def _publishNWith[F[_]](
       timeout: FiniteDuration
       , messages: Vector[((String @@ TopicName, Int @@ PartitionId), Vector[Message])]
@@ -407,7 +479,11 @@ object KafkaClient {
       }.runLast
     }
 
-
+    /**
+      * Refreshes the known topology of the client
+      *
+      * @param signal The signal of this client
+      */
     def _refreshTopology[F[_]](
       signal: Signal[F,ClientState[F]]
     )(implicit F: Async[F]): F[ClientState[F]] = {
@@ -428,8 +504,6 @@ object KafkaClient {
         ){_.now}
       }}
     }
-
-
 
     /**
       * Requests initial metadata from all seed brokers. All seeds are queried initially, and then first response is returned.
@@ -505,6 +579,7 @@ object KafkaClient {
       )
     }
 
+    /** Awaits connection of a given broker **/
     def awaitBrokerConnected[F[_]](
       signal: Signal[F,ClientState[F]]
       , brokerId: Int @@ Broker
@@ -518,12 +593,19 @@ object KafkaClient {
       }.take(1)
     }
 
+    /**
+      * Groups messages by leaders of their topic and partition.
+      * Then we apply a function with the connected broker and messages to it.
+      * In case the leader is not yet elected we await election.
+      * In case the broker is not connected yet we await its connection.
+      */
     def sendToLeaders[F[_], A, B](
       signal: Signal[F, ClientState[F]]
       , msges: Vector[((String @@ TopicName,Int @@ PartitionId), Vector[A])]
     )(
       doAction: (Connected[F], Vector[((String @@ TopicName, Int @@ PartitionId), Vector[A])]) => F[B]
     )(implicit F: Async[F], S:Scheduler): Stream[F, B] = {
+      import shapeless.syntax.std.tuple._
       Stream.eval(signal.get).flatMap{cs =>
         val byBroker =
           msges.map{case (key, messages) => (cs.topics.get(key).flatMap(_.leader), key, messages)}.groupBy(_._1)
@@ -537,23 +619,23 @@ object KafkaClient {
                 case None =>
                   time.sleep(1.second) ++
                   Stream.eval_(_refreshTopology(signal)) ++
-                  sendToLeaders(signal, data.map{case (_, key, messages) => key -> messages})(doAction)
+                  sendToLeaders(signal, data.map{_.drop(1)})(doAction)
 
                 case Some(conn) =>
-                  Stream.eval(doAction(conn, data.map{case (_, key, messages) => key -> messages}))
+                  Stream.eval(doAction(conn, data.map{_.drop(1)}))
               }
 
             case (None, data) =>
               time.sleep(1.second) ++
                 Stream.eval_(_refreshTopology(signal)) ++
-                sendToLeaders(signal, data.map{case (_, key, messages) => key -> messages})(doAction)
+                sendToLeaders(signal, data.map{_.drop(1)})(doAction)
           }
         }
 
       }
     }
 
-
+    /** Gets a leader for given topic and partition, while getting state from signal **/
     def getLeaderFor[F[_]](
       signal: Signal[F,ClientState[F]]
       , topic: String @@ TopicName
@@ -563,6 +645,7 @@ object KafkaClient {
       .flatMap{_getLeaderFor(signal, topic, partitionId)}
     }
 
+    /** Gets a leader for given topic and partition **/
     def _getLeaderFor[F[_]](
       signal: Signal[F,ClientState[F]]
       , topic: String @@ TopicName
@@ -574,6 +657,7 @@ object KafkaClient {
       }
     }
 
+    /** Awaits selection leader selection for a given topic and partition **/
     def awaitElection[F[_]](
       signal: Signal[F,ClientState[F]]
       , topic: String @@ TopicName
@@ -628,9 +712,11 @@ object KafkaClient {
       type ControlRequest =
         Either[(MetadataRequest, Async.Ref[F, Option[MetadataResponse]]),(ProduceRequest, Async.Ref[F, Option[ProduceResponse]])]
 
+      /** Checks whether the is still active **/
       def brokerInstanceGone:Stream[F,Boolean] =
         signal.discrete.map(!_.brokers.contains(id))
 
+      /** Creates a function handle produce request for this broker **/
       def produce(enqueue: ((ProduceRequest, Async.Ref[F, Option[ProduceResponse]])) => F[Unit])(req: ProduceRequest): F[Option[ProduceResponse]] =
         F.flatMap(Async.ref[F, Option[ProduceResponse]]){ref =>
         F.flatMap(enqueue((req, ref))){_ =>
@@ -638,6 +724,7 @@ object KafkaClient {
           else ref.get
         }}
 
+      /** Creates a function handle metadata request for this broker **/
       def getMetadata(enqueue: ((MetadataRequest, Async.Ref[F,Option[MetadataResponse]])) => F[Unit]): F[Option[MetadataResponse]] =
         F.flatMap(Async.ref[F, Option[MetadataResponse]]){ref =>
         F.flatMap(signal.get)(cs =>
@@ -645,13 +732,20 @@ object KafkaClient {
           ref.get
         })}
 
-      def processMultiple(
+      /**
+        * Processes produce response, tries to send again for all failed produces
+        * @param ref  The ref that passes through the final response to client
+        * @param resp The response that was generated by by this broker
+        * @param req  The request to which the response was generated
+        */
+      def processProduce(
         ref: Async.Ref[F, Option[ProduceResponse]]
         , resp: ProduceResponse
         , req: ProduceRequest
       ): Stream[F, Nothing] = {
         type ResultData = ((String @@ TopicName, Int @@ PartitionId), PartitionProduceResult)
 
+        /** Splits the result data of the response into successful and failed ones **/
         def splitByComplete(
           remaining: Vector[ResultData]
           , completed: Vector[ResultData]
@@ -668,6 +762,7 @@ object KafkaClient {
           }
         }
 
+        /** Re-sends given data to their respective new leaders **/
         def doResend(resend: Vector[ResultData]): Stream[F, Option[ProduceResponse]] = {
           val requests = resend.flatMap{case ((topic, partition), _) =>
             req.messages.find(_._1 == topic)
@@ -679,6 +774,10 @@ object KafkaClient {
           _doResend(requests)
         }
 
+        /**
+          * Implementation of resend, awaits connected current leader for topic and partition
+          * then it sends new requests to those brokers
+          */
         def _doResend(requests: Vector[((String @@ TopicName, Int @@ PartitionId), Vector[Message])]): Stream[F, Option[ProduceResponse]] = {
           Stream.eval_(_refreshTopology(signal)) ++
           sendToLeaders(signal, requests){
@@ -720,10 +819,18 @@ object KafkaClient {
         }
       }
 
+      /**
+        * Processes response from the server (produce and metadata)
+        * Fetches the request for this response, then removes this request
+        * from the opened requests, after that we pass the response
+        */
       def processResponse(
         open: Signal[F, Map[Int,ControlRequest]]
       )(resp: ResponseMessage)(implicit F: Async[F]): Stream[F, Nothing] = {
-        Stream.eval(open.get)
+        Stream.eval(open.get).flatMap{opened =>
+          Stream.eval_(open.modify(_ - resp.correlationId))
+          .map(_ => opened)
+        }
         .map(_.get(resp.correlationId))
         .flatMap{
           case None => Stream.empty
@@ -732,21 +839,21 @@ object KafkaClient {
               case Left((_, ref)) =>
                 resp.response match {
                   case resp: MetadataResponse => Stream.eval_(ref.setPure(Some(resp)))
-                  case _ => Stream.empty
+                  case _ => Stream.eval_(ref.setPure(None))
                 }
 
               case Right((req, ref)) =>
                 resp.response match {
                   case resp: ProduceResponse =>
-                    processMultiple(ref, resp, req)
+                    processProduce(ref, resp, req)
 
-                  case _ => Stream.empty
+                  case _ => Stream.eval_(ref.setPure(None))
                 }
             }
-
         }
       }
 
+      /** Sets the state of this broker to connected **/
       def updateConnected(incomingQ: Queue[F, ControlRequest]): Stream[F, Nothing] = {
         Stream.eval_{
           signal.modify{state =>
@@ -769,7 +876,8 @@ object KafkaClient {
       Stream.eval(async.signalOf(Map[Int,ControlRequest]())).flatMap { open =>
         val clientId = clientName + "-control"
 
-        def connectAndProcess:Stream[F,Nothing] = {
+        /** Connects the broker and processes requests **/
+        def connectAndProcess:Stream[F, Nothing] = {
           val idx = new AtomicInteger(0)
           Stream.eval(
             F.delay(brokerConnection(new InetSocketAddress(address.host, address.port)))
@@ -788,7 +896,8 @@ object KafkaClient {
           }.flatMap{processResponse(open)}
         }
 
-        def updateError(err:Throwable):Stream[F,Failed[F]] = {
+        /** Sets the state of this broker to Failed or increments number of tries **/
+        def updateError(err: Throwable):Stream[F, Failed[F]] = {
           Stream.eval_(
             signal.modify{cs =>
               val failed =
@@ -802,9 +911,11 @@ object KafkaClient {
           )
         }
 
-        def sleepRetry(f:Failed[F]):Stream[F,Nothing] = time.sleep(retryTimeout)
+        /** Waits a retry timeout incremented by every consecutive failure**/
+        def sleepRetry(f: Failed[F]):Stream[F,Nothing] = time.sleep(retryTimeout * f.failures)
 
-        def failOpened(f:Failed[F]):Stream[F,Nothing] = {
+        /** Fails all opened requests against this broker **/
+        def failOpened(f: Failed[F]):Stream[F, Nothing] = {
           Stream.eval(open.get).flatMap{rqs => Stream.emits(rqs.values.toSeq)}
           .flatMap(rq => Stream.eval_(rq.fold(_._2.setPure(None), _._2.setPure(None))))
         }
@@ -979,21 +1090,8 @@ object KafkaClient {
        }
     }
 
-
     def logStateChanges[F[_]](s:ClientState[F], meta:MetadataResponse)(implicit Logger:Logger[F]):Stream[F,Nothing] = {
       Logger.debug_(s"Updated client state with received metadata. New state is $s. Metadata: $meta")
     }
-
-
-
-
-
   }
-
-
 }
-
-
-
-
-
