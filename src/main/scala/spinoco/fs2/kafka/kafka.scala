@@ -5,6 +5,7 @@ import java.nio.channels.AsynchronousChannelGroup
 
 import fs2._
 import fs2.util.Async
+import scodec.bits.ByteVector
 import shapeless.tag._
 import spinoco.protocol.kafka.{PartitionId, ProtocolVersion, TopicName}
 
@@ -17,7 +18,7 @@ package object kafka {
     * @param key        Key of the message
     * @param message    Message content
     */
-  case class TopicMessage(offset:Long,key:Chunk.Bytes,message:Chunk.Bytes)
+  case class TopicMessage(offset: Long, key: ByteVector, message: ByteVector)
 
   type TopicAndPartition = (String @@ TopicName, Int @@ PartitionId)
 

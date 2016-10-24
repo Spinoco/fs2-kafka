@@ -17,9 +17,9 @@ import spinoco.fs2.kafka.network.BrokerConnection
 import spinoco.fs2.kafka.state.BrokerState.{Connected, Connecting}
 import spinoco.fs2.kafka.state._
 import spinoco.protocol.kafka.Message.{CompressedMessages, SingleMessage}
-import spinoco.protocol.kafka.Request.{MetadataRequest, ProduceRequest, RequiredAcks}
+import spinoco.protocol.kafka.Request.{FetchRequest, MetadataRequest, ProduceRequest, RequiredAcks}
 import spinoco.protocol.kafka._
-import spinoco.protocol.kafka.Response.{MetadataResponse, PartitionProduceResult, ProduceResponse}
+import spinoco.protocol.kafka.Response.{FetchResponse, MetadataResponse, PartitionProduceResult, ProduceResponse}
 
 import scala.concurrent.duration._
 /**
@@ -186,7 +186,7 @@ object KafkaClient {
           concurrent.join(Int.MaxValue)(Stream(
             impl.controller(state,impl.controlConnection(state,brokerConnection,brokerRetryDelay,protocol,brokerControlQueueBound, clientName))
             , impl.metadataRefresher(impl.initialMetadata(ensemble,protocol,clientName,brokerConnection), state, clientTopologyRefresh)
-            , Stream.eval(impl.mkClient(state))
+            , Stream.eval(impl.mkClient(state, brokerConnection, clientName, protocol))
           ))
         }
     }}
@@ -199,15 +199,243 @@ object KafkaClient {
 
     def mkClient[F[_]](
       signal: Signal[F,ClientState[F]]
+      , brokerConnection: InetSocketAddress => Pipe[F, RequestMessage, ResponseMessage]
+      , clientName: String
+      , protocolVersion: ProtocolVersion.Value
     )(implicit F: Async[F], S:Scheduler):F[KafkaClient[F]] = F.delay {
       new KafkaClient[F] {
-        def subscribe(topic: String, partition: Int, offset: Long, maxQueue: Int, followTail: Boolean): Stream[F, TopicMessage] = ???
+        def subscribe(topic: String, partition: Int, offset: Long, maxQueue: Int, followTail: Boolean): Stream[F, TopicMessage] = _subscribe(topic, partition, offset, maxQueue, followTail, clientName, signal, brokerConnection, protocolVersion)
         def publish1(topic: String, partition: Int, key: Bytes, message: Bytes, requireQuorum: Boolean, serverAckTimeout: FiniteDuration): F[Option[Long]] = _publish1(signal, tag[TopicName](topic), tag[PartitionId](partition), key, message, requireQuorum, serverAckTimeout)
         def publishUnsafe1(topic: String, partition: Int, key: Bytes, message: Bytes): F[Unit] = _publishUnsafe1(signal, tag[TopicName](topic), tag[PartitionId](partition), key, message)
         def publishN[A](messages: Chunk[(String, Int, Bytes, Bytes, A)], requireQuorum: Boolean, serverAckTimeout: FiniteDuration, compress: Option[Compression.Value]): F[Chunk[(A, Long)]] = _publishN(messages, compress, requireQuorum, serverAckTimeout, signal)
         def publishUnsafeN(messages: Chunk[(String, Int, Bytes, Bytes)], compress: Option[Compression.Value]): F[Unit] = _publishUnsafeN(messages, compress, signal)
         def topics: Stream[F, Map[String, Set[Int]]] = signal.discrete.map(_.topics.groupBy(_._1._1).map{case (topic, partitions) => (topic:String) -> partitions.keySet.map(_._2:Int)})
         def refreshTopology: F[Unit] = F.map(_refreshTopology(signal)){_ => ()}
+      }
+    }
+
+    /**
+      * The implementation of subscribe
+      *
+      * @param topic            The topic from which we want to read
+      * @param partition        The partition from which we want to read
+      * @param offset           The offset at which we want to start
+      * @param maxQueue         The maximum number of pre-fetched messages
+      * @param followTail       Whether we should follow await further updates after
+      *                         the the end of current messages is reached
+      * @param clientName       The name of this client that is connecting
+      * @param clientSignal     The signal of this client state
+      * @param brokerConnection Builder for a connection to a broker
+      * @param protocolVersion  The protocol used against the current nodes
+      */
+    def _subscribe[F[_]](
+      topic: String
+      , partition: Int
+      , offset: Long
+      , maxQueue: Int
+      , followTail: Boolean
+      , clientName: String
+      , clientSignal: Signal[F,ClientState[F]]
+      , brokerConnection: InetSocketAddress => Pipe[F, RequestMessage, ResponseMessage]
+      , protocolVersion: ProtocolVersion.Value
+    )(implicit F: Async[F], S: Scheduler): Stream[F, TopicMessage] = {
+      Stream.eval(async.boundedQueue[F, TopicMessage](maxQueue)).flatMap{queue =>
+
+        val query = _subscribeLeader(
+          topic = tag[TopicName](topic)
+          , partition = tag[PartitionId](partition)
+          , offset = tag[Offset](offset)
+          , followTail = followTail
+          , clientName = clientName
+          , signal = clientSignal
+          , brokerConnection = brokerConnection
+          , protocolVersion = protocolVersion
+        )
+
+        concurrent.join(2)(
+          Stream.emits(Seq(
+            queue.dequeue
+            , query.to(queue.enqueue).drain
+          ))
+        )
+      }
+    }
+
+    /**
+      * Collects fetch responses from server, and then it acts according
+      * following rules:
+      *   - In case the stream is exhausted, it emits on left last successful offset
+      *     this offset should be used to restart the fetching
+      *   - In case there is no response for partition and we do no follow tail
+      *     then we assume that we have finished the fetch
+      *   - In case there is an error for the partition fetch, we emit the last
+      *     offset on the left and follow the restart procedure
+      *   - Otherwise we emit topic messages on the right
+      *   - In case we have reached the final water mark and we do not follow tail
+      *     then we finish the pull
+      *
+      * @param initialLast  The offset with which this collect started
+      * @param enqueue      Enqueue method to request another poll for long polling
+      * @param followTail   Whether we follow tail
+      * @param topic        The topic that this fetch is for
+      * @param partition    The partition that this fetch is for
+      */
+    def collect[F[_]](
+      initialLast: Long @@ Offset
+      , enqueue: Long @@ Offset => F[Unit]
+      , followTail: Boolean
+      , topic: String @@ TopicName
+      , partition: Int @@ PartitionId
+    ): Handle[F, FetchResponse] => Pull[F, Either[Long @@ Offset, TopicMessage], Nothing] = {
+      def go(last: Long @@ Offset): Handle[F, FetchResponse] => Pull[F, Either[Long @@ Offset, TopicMessage], Nothing] = {
+        _.receive1Option {
+          case None => Pull.output1(Left(last)) >> Pull.done
+          case Some((fr, handle)) =>
+            fr.data.find(_._1 == topic).flatMap(_._2.find(_.partitionId == partition)) match {
+              case None =>
+                if (followTail) Pull.eval(enqueue(last)) >> go(last)(handle)
+                else Pull.done
+
+              case Some(parResp) =>
+                parResp.error match {
+                  case Some(_) => Pull.output1(Left(last)) >> Pull.done
+                  case None =>
+                    val (nlast, messages) = makeTopicMessages(parResp.messages, last)
+                    if (nlast == parResp.highWMOffset && !followTail) Pull.done
+                    else {
+                      Pull.output(Chunk.seq(messages.map(Right(_)))).flatMap(_ =>
+                        Pull.eval(enqueue(nlast))
+                      ) >> go(nlast)(handle)
+                    }
+                }
+            }
+        }
+      }
+
+      go(initialLast)
+    }
+
+    /**
+      * The actuall implememntation of fetching, this updates number of connections
+      * to a broker, and creates a long poll for fetching against current master for
+      * this topic and partition
+      *
+      * @param topic            The topic from which we want to read
+      * @param partition        The partition from which we want to read
+      * @param offset           The offset at which we want to start
+      * @param followTail       Whether we should follow await further updates after
+      *                         the the end of current messages is reached
+      * @param clientName       The name of this client that is connecting
+      * @param signal           The signal of this client state
+      * @param brokerConnection Builder for a connection to a broker
+      * @param protocolVersion  The protocol used against the current nodes
+      */
+    def _subscribeLeader[F[_]](
+      topic: String @@ TopicName
+      , partition: Int @@ PartitionId
+      , offset: Long @@ Offset
+      , followTail: Boolean
+      , clientName: String
+      , signal: Signal[F,ClientState[F]]
+      , brokerConnection: InetSocketAddress => Pipe[F, RequestMessage, ResponseMessage]
+      , protocolVersion: ProtocolVersion.Value
+    )(implicit F: Async[F], S: Scheduler): Stream[F, TopicMessage] = {
+
+      /**
+        * Creates a long poll for a given connected broker
+        * @param conn The name of the
+        */
+      def longPoll(
+        conn: Connected[F]
+      ): Stream[F, Either[Long @@ Offset, TopicMessage]] = {
+        Stream.eval(async.boundedQueue[F, Long @@ Offset](2)).flatMap{queue =>
+
+          Stream.eval_(queue.enqueue1(offset)) ++
+          queue.dequeue.map{ offset =>
+            RequestMessage(
+              version = protocolVersion
+              , correlationId = 0
+              , clientId = clientName
+              , request = FetchRequest(
+                replica = tag[Broker](-1)
+                , maxWaitTime = 100.millis
+                , minBytes = 4096
+                , topics = Vector((topic, Vector((partition, offset, 8192))))
+              )
+            )
+          }.through(brokerConnection(new InetSocketAddress(conn.address.host, conn.address.port)))
+          .collect{ case ResponseMessage(_, fr: FetchResponse) => fr}
+          .pull(collect(offset, queue.enqueue1, followTail, topic, partition))
+        }
+      }
+
+      getLeaderFor(signal, topic, partition).flatMap{
+        case None => _subscribeLeader(topic, partition, offset, followTail, clientName,  signal, brokerConnection, protocolVersion)
+        case Some(conn) =>
+          Stream.eval_(
+            signal.modify{cs =>
+              cs.copy(
+                brokers = cs.brokers + (conn.brokerId -> conn.copy(connections = conn.connections + 1))
+              )
+          }) ++
+          longPoll(conn).flatMap{
+            case Right(msg) => Stream.emit(msg)
+            case Left(lastFromThis) =>
+              Stream.eval_(
+                signal.modify{cs =>
+                  val brokers =
+                    cs.brokers.get(conn.brokerId)
+                    .collect{case con: Connected[F] =>
+                      con.copy(connections = con.connections - 1)
+                    }.fold(cs.brokers){broker => cs.brokers + (broker.brokerId -> broker)}
+
+                  cs.copy(brokers = brokers)
+                }) ++
+              Stream.eval_(_refreshTopology(signal)) ++
+                _subscribeLeader(
+                  topic = topic
+                  , partition = partition
+                  , offset = lastFromThis
+                  , followTail = followTail
+                  , clientName = clientName
+                  , signal = signal
+                  , brokerConnection = brokerConnection
+                  , protocolVersion = protocolVersion
+                )
+          }
+      }
+    }
+
+    /**
+      * Makes topic messages out of kafka messages, this unwraps all of compressed messages
+      * and drops all messages that are before `from`
+      *
+      * @param messages Kafka messages that were received with fetch
+      * @param from     The last known offset for this fetch
+      */
+    def makeTopicMessages(messages: Vector[Message], from: Long @@ Offset): (Long @@ Offset, Vector[TopicMessage]) = {
+      def expand(current: Vector[Message], expanded: Vector[SingleMessage]): Vector[SingleMessage] = {
+        current.headOption match {
+          case None => expanded
+          case Some(single: SingleMessage) =>
+            expand(current.drop(1), expanded :+ single)
+
+          case Some(compressed: CompressedMessages) =>
+            val updated =
+              compressed.messages.collect{case s: SingleMessage => s}
+              .map{m => m.copy(offset = compressed.offset + m.offset)}
+
+            expand(current.drop(1), expanded ++ updated)
+        }
+      }
+
+      val expanded = expand(messages, Vector())
+      val fromIdx = expanded.indexWhere(_.offset > from)
+      if (fromIdx < 0) (from, Vector.empty)
+      else {
+        val (_, wanted) = expanded.splitAt(fromIdx)
+        val last = wanted.lastOption.fold(from){sm => tag[Offset](sm.offset)}
+        (last, wanted.map(sm => TopicMessage(sm.offset, sm.key, sm.value)))
       }
     }
 
@@ -734,6 +962,7 @@ object KafkaClient {
 
       /**
         * Processes produce response, tries to send again for all failed produces
+        *
         * @param ref  The ref that passes through the final response to client
         * @param resp The response that was generated by by this broker
         * @param req  The request to which the response was generated
