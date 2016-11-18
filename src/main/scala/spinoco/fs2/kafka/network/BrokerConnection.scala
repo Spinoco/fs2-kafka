@@ -58,7 +58,7 @@ object BrokerConnection {
               openRequests = openRequests
             ))
 
-          send.onFinalize(socket.endOfInput)  mergeDrainL receive
+          (send mergeDrainL receive).onFinalize{socket.close}
         }
       }
   }

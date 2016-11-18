@@ -293,7 +293,7 @@ object KafkaClient {
           case Some((fr, handle)) =>
             fr.data.find(_._1 == topic).flatMap(_._2.find(_.partitionId == partition)) match {
               case None =>
-                if (followTail) Pull.eval(enqueue(last)) >> go(last)(handle)
+                if (followTail) Pull.eval(enqueue(tag[Offset](last + 1))) >> go(last)(handle)
                 else Pull.done
 
               case Some(parResp) =>
@@ -304,7 +304,7 @@ object KafkaClient {
                     if (nlast == parResp.highWMOffset && !followTail) Pull.done
                     else {
                       Pull.output(Chunk.seq(messages.map(Right(_)))).flatMap(_ =>
-                        Pull.eval(enqueue(nlast))
+                        Pull.eval(enqueue(tag[Offset](nlast + 1)))
                       ) >> go(nlast)(handle)
                     }
                 }
@@ -430,7 +430,7 @@ object KafkaClient {
       }
 
       val expanded = expand(messages, Vector())
-      val fromIdx = expanded.indexWhere(_.offset > from)
+      val fromIdx = expanded.indexWhere(_.offset >= from)
       if (fromIdx < 0) (from, Vector.empty)
       else {
         val (_, wanted) = expanded.splitAt(fromIdx)
@@ -798,7 +798,7 @@ object KafkaClient {
           val nextBrokers = next.brokers.keySet
 
           Stream.emits(
-            (prevBrokers diff nextBrokers).toSeq
+            (nextBrokers diff prevBrokers).toSeq
             .flatMap { id => next.brokers.get(id).toSeq }
             .map { broker =>  mkBroker(broker.brokerId, broker.address) }
           )
@@ -1057,7 +1057,7 @@ object KafkaClient {
         open: Signal[F, Map[Int,ControlRequest]]
       )(resp: ResponseMessage)(implicit F: Async[F]): Stream[F, Nothing] = {
         Stream.eval(open.get).flatMap{opened =>
-          Stream.eval_(open.modify(_ - resp.correlationId))
+          Stream.eval(open.modify(_ - resp.correlationId))
           .map(_ => opened)
         }
         .map(_.get(resp.correlationId))
@@ -1083,8 +1083,8 @@ object KafkaClient {
       }
 
       /** Sets the state of this broker to connected **/
-      def updateConnected(incomingQ: Queue[F, ControlRequest]): Stream[F, Nothing] = {
-        Stream.eval_{
+      def updateConnected(incomingQ: Queue[F, ControlRequest]): Stream[F, Unit] = {
+        Stream.eval{
           signal.modify{state =>
             state.copy(brokers =
               state.brokers + (id ->
@@ -1098,7 +1098,7 @@ object KafkaClient {
               )
             )
           }
-        }
+        }.map(_ => ())
       }
 
       Stream.eval(async.boundedQueue[F,ControlRequest](queueBound)).flatMap { incomingQ =>
