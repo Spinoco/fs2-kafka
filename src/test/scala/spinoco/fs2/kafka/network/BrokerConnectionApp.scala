@@ -38,7 +38,7 @@ object BrokerConnectionApp extends App {
           , clientId = "manager"
           , request = Request.MetadataRequest(Vector.empty)
         )
-      ) ++ time.sleep[Task](10.seconds)
+      ) ++ time.sleep_[Task](10.seconds)
 
     source.through(BrokerConnection(
       address = new InetSocketAddress("127.0.0.1", 9092)
@@ -68,7 +68,7 @@ object BrokerConnectionApp extends App {
             )
           )
         )
-      ) ++ time.sleep[Task](10.seconds)
+      ) ++ time.sleep_[Task](10.seconds)
 
     source.through(BrokerConnection(
       address = new InetSocketAddress("127.0.0.1", 9092)
@@ -96,7 +96,7 @@ object BrokerConnectionApp extends App {
             )))
           )
         )
-      ) ++ time.sleep[Task](10.seconds)
+      ) ++ time.sleep_[Task](10.seconds)
 
     source.through(BrokerConnection(
       address = new InetSocketAddress("127.0.0.1", 9092)

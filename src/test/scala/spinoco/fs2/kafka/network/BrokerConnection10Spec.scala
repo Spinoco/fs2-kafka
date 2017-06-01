@@ -1,12 +1,14 @@
 package spinoco.fs2.kafka.network
 
 import java.net.InetSocketAddress
+import java.util.Date
 
 import fs2._
 import scodec.bits.ByteVector
 import shapeless.tag
+import spinoco.fs2.kafka.partition
 import spinoco.protocol.kafka.Message.SingleMessage
-import spinoco.protocol.kafka.Request.{FetchRequest, MetadataRequest, ProduceRequest, RequiredAcks}
+import spinoco.protocol.kafka.Request._
 import spinoco.protocol.kafka.Response._
 import spinoco.protocol.kafka._
 
@@ -19,7 +21,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
   "Kafka 0.10.0" - {
     "Publish and subscribe message" in {
       val result =
-        withKafka8Singleton(KafkaRuntimeRelease.V_0_10_0).flatMap { case (zkId, kafkaId) =>
+        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0).flatMap { case (zkId, kafkaId) =>
           val createTopic = Stream.eval_(createKafkaTopic(kafkaId, testTopic1))
           val publishOne = (Stream(
             RequestMessage(
@@ -32,7 +34,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
                 , messages = Vector((testTopic1, Vector((part0, Vector(SingleMessage(0l, MessageVersion.V0, None, ByteVector(1, 2, 3), ByteVector(5, 6, 7)))))))
               )
             )
-          ) ++ time.sleep(1.minute))
+          ) ++ time.sleep_(1.minute))
             .through(BrokerConnection(new InetSocketAddress("127.0.0.1", 9092)))
             .take(1).map(Left(_))
 
@@ -47,7 +49,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
                 , minBytes = 1
                 , topics = Vector((testTopic1, Vector((part0, tag[Offset](0), 10240))))
               )
-            )) ++ time.sleep(1.minute))
+            )) ++ time.sleep_(1.minute))
               .through(BrokerConnection(new InetSocketAddress("127.0.0.1", 9092)))
               .take(1).map(Right(_))
 
@@ -65,7 +67,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
 
     "Fetch metadata for topics" in {
       val result =
-        withKafka8Singleton(KafkaRuntimeRelease.V_8_2_0).flatMap { case (zkId, kafkaId) =>
+        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0).flatMap { case (zkId, kafkaId) =>
           val createTopic1 = Stream.eval_(createKafkaTopic(kafkaId, testTopic1))
           val createTopic2 = Stream.eval_(createKafkaTopic(kafkaId, testTopic2))
 
@@ -75,7 +77,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
               , correlationId = 1
               , clientId = "test-subscriber"
               , request = MetadataRequest(Vector())
-            )) ++ time.sleep(1.minute))
+            )) ++ time.sleep_(1.minute))
               .through(BrokerConnection(new InetSocketAddress("127.0.0.1",9092)))
               .take(1)
 
@@ -89,5 +91,35 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
       metaResponse.flatMap(_.brokers).size shouldBe 1
       metaResponse.flatMap(_.topics).size shouldBe 2
     }
+
+
+    "Fetch offsets topics" in {
+      val result =
+        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0).flatMap { case (zkId, kafkaId) =>
+          val createTopic1 = Stream.eval_(createKafkaTopic(kafkaId, testTopic1))
+
+          val fetchOffsets=
+            (Stream(RequestMessage(
+              version = ProtocolVersion.Kafka_0_8
+              , correlationId = 1
+              , clientId = "test-subscriber"
+              , request = OffsetsRequest(tag[Broker](-1), Vector((testTopic1, Vector((partition(0), new Date(-1), Some(10))))))
+            )) ++ time.sleep_(1.minute))
+              .through(BrokerConnection(new InetSocketAddress("127.0.0.1",9092)))
+              .take(1)
+
+          createTopic1 ++ fetchOffsets
+
+        }.runLog.unsafeRun()
+
+      val offsetResponse = result.collect { case ResponseMessage(1, offset:OffsetResponse) => offset }
+
+      offsetResponse.size shouldBe 1
+      offsetResponse.flatMap(_.data) shouldBe Vector(
+        (testTopic1, Vector(PartitionOffsetResponse(partition(0), None, new Date(0), Vector(tag[Offset](0)))))
+      )
+    }
+
+
   }
 }

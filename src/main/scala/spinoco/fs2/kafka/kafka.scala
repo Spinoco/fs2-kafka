@@ -1,12 +1,15 @@
 package spinoco.fs2
 
-import java.net.InetSocketAddress
+
 import java.nio.channels.AsynchronousChannelGroup
 
 import fs2._
 import fs2.util.Async
+import scodec.bits.ByteVector
+import shapeless.tag
 import shapeless.tag._
-import spinoco.protocol.kafka.{PartitionId, ProtocolVersion, TopicName}
+import spinoco.fs2.kafka.state.BrokerAddress
+import spinoco.protocol.kafka.{Offset, PartitionId, ProtocolVersion, TopicName}
 
 
 package object kafka {
@@ -16,8 +19,9 @@ package object kafka {
     * @param offset     Offset of the message
     * @param key        Key of the message
     * @param message    Message content
+    * @param tail       Offset of last message in the topic
     */
-  case class TopicMessage(offset:Long,key:Chunk.Bytes,message:Chunk.Bytes)
+  case class TopicMessage(offset: Long @@ Offset, key: ByteVector, message: ByteVector, tail: Long @@ Offset)
 
   type TopicAndPartition = (String @@ TopicName, Int @@ PartitionId)
 
@@ -45,13 +49,26 @@ package object kafka {
     *                     - fetch: Connection where fetch requests are sent to.
     */
   def client[F[_]](
-    ensemble:Set[InetSocketAddress]
+    ensemble: Set[BrokerAddress]
     , protocol: ProtocolVersion.Value
     , clientName: String
   )(implicit AG: AsynchronousChannelGroup, F:Async[F], S: Scheduler, L: Logger[F]):Stream[F,KafkaClient[F]] =
     KafkaClient(ensemble, protocol, clientName)
 
 
+  /** types correctly name of the topic **/
+  def topic(name: String): String @@ TopicName = tag[TopicName](name)
 
+  /** types correctly id of the partition**/
+  def partition(id: Int): Int @@ PartitionId = tag[PartitionId](id)
+
+  /** types the offset in the topic**/
+  def offset(offset: Long): Long @@ Offset = tag[Offset](offset)
+
+  /** Starting from this offset will assure that we will read always from very oldest message (head) kept in topic **/
+  val HeadOffset = offset(0)
+
+  /** Starting from this offset will assure we starting with most recent messages written to topic (tail) **/
+  val TailOffset = offset(Long.MaxValue)
 
 }

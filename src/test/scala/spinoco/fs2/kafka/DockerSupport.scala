@@ -12,12 +12,13 @@ import scala.sys.process.{Process, ProcessLogger}
   *Various helpers for interacting with docker instance
   */
 object DockerSupport {
-  val ExtractVersion = """Docker version ([0-9\.]+), build ([0-9a-fA-F]+).*""".r("version", "build")
+  val ExtractVersion = """Docker version ([0-9\.\-a-z]+), build ([0-9a-fA-F]+).*""".r("version", "build")
   sealed trait DockerId
 
   /** Returns version of docker, if that docker is available. **/
   def dockerVersion:Task[Option[String]] = Task.delay {
     val output = Process("docker -v").!!
+    println(s"XXXXY ${output} = ${ExtractVersion.findAllMatchIn(output).toList}")
     for {
       m <- ExtractVersion.findAllMatchIn(output).toList.headOption
       version <- Option(m.group("version"))
@@ -85,6 +86,18 @@ object DockerSupport {
     */
   def cleanImage(imageId:String @@ DockerId):Task[Unit] = Task.delay {
     Process(s"docker rm $imageId").!!
+    ()
+  }
+
+
+  def createNetwork(name: String, ipSubnet:String = "172.25.0.0/16 "): Task[Unit] = Task.delay {
+    Process(s"""docker network create --subnet $ipSubnet $name""").!!
+    ()
+  }
+
+
+  def removeNetwork(name: String): Task[Unit] = Task.delay {
+    Process(s"""docker network rm $name""").!!
     ()
   }
 

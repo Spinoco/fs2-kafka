@@ -43,11 +43,11 @@ object BrokerConnection {
     address: InetSocketAddress
     , writeTimeout: Option[FiniteDuration] = None
     , readMaxChunkSize: Int = 256 * 1024      // 256 Kilobytes
-  )(implicit AG:AsynchronousChannelGroup, F: Async[F]):Pipe[F,RequestMessage,ResponseMessage] = {
+  )(implicit AG:AsynchronousChannelGroup, F: Async[F]): Pipe[F, RequestMessage, ResponseMessage] = {
     (source: Stream[F,RequestMessage]) =>
       fs2.io.tcp.client(address).flatMap { socket =>
         eval(F.refOf(Map.empty[Int,RequestMessage])).flatMap { openRequests =>
-          val send = source.through(impl.sendMessages(
+          val send = source.map { x => println(s"XXXY >>> SENDING $x"); x }.through(impl.sendMessages(
             openRequests = openRequests
             , sendOne = socket.write(_, writeTimeout)
           ))
@@ -56,7 +56,7 @@ object BrokerConnection {
             socket.reads(readMaxChunkSize, timeout = None)
             .through(impl.receiveMessages(
               openRequests = openRequests
-            ))
+            )). map { x => println(s"XXXY <<< RECEIVED $x"); x}
 
           send.onFinalize(socket.endOfInput)  mergeDrainL receive
         }
