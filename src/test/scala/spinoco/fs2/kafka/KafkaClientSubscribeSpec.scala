@@ -1,12 +1,9 @@
 package spinoco.fs2.kafka
 
 import fs2._
+import fs2.util.Async
 import scodec.bits.ByteVector
-import spinoco.fs2.kafka.network.BrokerConnection
-import spinoco.fs2.kafka.state.BrokerAddress
-import spinoco.protocol.kafka.Message.SingleMessage
-import spinoco.protocol.kafka.Request.{ProduceRequest, RequiredAcks}
-import spinoco.protocol.kafka.{MessageVersion, ProtocolVersion, RequestMessage}
+import spinoco.protocol.kafka.{ProtocolVersion}
 
 import scala.concurrent.duration._
 
@@ -15,23 +12,13 @@ import scala.concurrent.duration._
   */
 class KafkaClientSubscribeSpec extends Fs2KafkaRuntimeSpec {
 
-  def publishNMessages(version: ProtocolVersion.Value, address: BrokerAddress, from: Int, to: Int, acks: RequiredAcks.Value =  RequiredAcks.NoResponse): Task[Unit] = {
-    address.toInetSocketAddress flatMap { inetAddress =>
-      Stream.range(from, to).map { idx =>
-        RequestMessage(
-          version = version
-          , correlationId = idx
-          , clientId = "test-publisher"
-          , request = ProduceRequest(
-            requiredAcks = acks
-            , timeout = 3.seconds
-            , messages = Vector((testTopicA, Vector((part0, Vector(SingleMessage(0l, MessageVersion.V0, None, ByteVector(1), ByteVector(idx)))))))
-          )
-        )
-      }
-      .through(BrokerConnection(inetAddress))
-      .run
+  def publishNMessages(client: KafkaClient[Task], version: ProtocolVersion.Value, from: Int, to: Int, quorum: Boolean = false): Task[Unit] = {
+
+    Stream.range(from, to).evalMap { idx =>
+      client.publish1(testTopicA, part0, ByteVector(1),  ByteVector(idx), quorum, 3.seconds)
     }
+    .run
+
   }
 
   def generateTopicMessages(from: Int, to: Int, tail: Long): Vector[TopicMessage] = {
@@ -47,13 +34,13 @@ class KafkaClientSubscribeSpec extends Fs2KafkaRuntimeSpec {
 
       ((withKafkaSingleton(KafkaRuntimeRelease.V_8_2_0) flatMap { case (zkDockerId, kafkaDockerId) =>
         Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
-        time.sleep(1.second) >>
-        Stream.eval(publishNMessages(ProtocolVersion.Kafka_0_8, localBroker1_9092, 0, 20)) >> {
+        time.sleep(1.second) >> {
           KafkaClient(Set(localBroker1_9092), ProtocolVersion.Kafka_0_8, "test-client") flatMap { kc =>
+            Stream.eval(publishNMessages(kc, ProtocolVersion.Kafka_0_8, 0, 20)) >>
             kc.subscribe(testTopicA, part0, offset(0l)).take(10)
           }
         }
-      } runLog ) unsafeRun) shouldBe generateTopicMessages(0, 10, 20)
+      } runLog  ) unsafeRun) shouldBe generateTopicMessages(0, 10, 20)
 
     }
 
@@ -61,26 +48,30 @@ class KafkaClientSubscribeSpec extends Fs2KafkaRuntimeSpec {
     "subscribe-at-zero-empty" in {
       ((withKafkaSingleton(KafkaRuntimeRelease.V_8_2_0) flatMap { case (zkDockerId, kafkaDockerId) =>
 
-        Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >> time.sleep(1.second) >> {
+        Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >> time.sleep(1.second) >>
+        Stream.eval(Async.ref[Task, KafkaClient[Task]]) flatMap { kcRef =>
            concurrent.join(Int.MaxValue)(Stream(
             KafkaClient(Set(localBroker1_9092), ProtocolVersion.Kafka_0_8, "test-client") flatMap { kc =>
-              kc.subscribe(testTopicA, part0, offset(0l)).take(10)
+              Stream.eval_(kcRef.setPure(kc)) ++
+              kc.subscribe(testTopicA, part0, offset(0l))
             }
-            , time.sleep_(1.second) ++ Stream.eval_(publishNMessages(ProtocolVersion.Kafka_0_8, localBroker1_9092, 0, 20))
-          ))
+            , time.sleep_(1.second) ++ Stream.eval_(kcRef.get flatMap { kc => publishNMessages(kc, ProtocolVersion.Kafka_0_8, 0, 20) })
+          )).take(10)
         }
       } runLog ) unsafeRun).map { _.copy(tail = offset(0)) } shouldBe generateTopicMessages(0, 10, 0)
     }
 
     "subscriber before head" in {
       ((withKafkaSingleton(KafkaRuntimeRelease.V_8_2_0) flatMap { case (zkDockerId, kafkaDockerId) =>
-        Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >> time.sleep(1.second) >> {
+        Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >> time.sleep(1.second) >>
+        Stream.eval(Async.ref[Task, KafkaClient[Task]]) flatMap { kcRef =>
           concurrent.join(Int.MaxValue)(Stream(
             KafkaClient(Set(localBroker1_9092), ProtocolVersion.Kafka_0_8, "test-client") flatMap { kc =>
-              kc.subscribe(testTopicA, part0, offset(-1l)).take(10)
+              Stream.eval_(kcRef.setPure(kc)) ++
+              kc.subscribe(testTopicA, part0, offset(-1l))
             }
-            , time.sleep_(1.second) ++ Stream.eval_(publishNMessages(ProtocolVersion.Kafka_0_8, localBroker1_9092, 0, 20))
-          ))
+            , time.sleep_(1.second) ++ Stream.eval_(kcRef.get flatMap { kc => publishNMessages(kc, ProtocolVersion.Kafka_0_8, 0, 20) })
+          )).take(10)
         }
       } runLog ) unsafeRun).map { _.copy(tail = offset(0)) } shouldBe generateTopicMessages(0, 10, 0)
     }
@@ -89,13 +80,15 @@ class KafkaClientSubscribeSpec extends Fs2KafkaRuntimeSpec {
       ((withKafkaSingleton(KafkaRuntimeRelease.V_8_2_0) flatMap { case (zkDockerId, kafkaDockerId) =>
         Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
         time.sleep(1.second) >>
-        Stream.eval(publishNMessages(ProtocolVersion.Kafka_0_8, localBroker1_9092, 0, 20)) >> {
+        Stream.eval(Async.ref[Task, KafkaClient[Task]]) flatMap { kcRef =>
           concurrent.join(Int.MaxValue)(Stream(
             KafkaClient(Set(localBroker1_9092), ProtocolVersion.Kafka_0_8, "test-client") flatMap { kc =>
-              kc.subscribe(testTopicA, part0, TailOffset).take(10)
+              Stream.eval_(publishNMessages(kc, ProtocolVersion.Kafka_0_8, 0, 20)) ++
+              Stream.eval_(kcRef.setPure(kc)) ++
+              kc.subscribe(testTopicA, part0, TailOffset)
             }
-            , time.sleep_(1.second) ++ Stream.eval_(publishNMessages(ProtocolVersion.Kafka_0_8, localBroker1_9092, 20, 40))
-          ))
+            , time.sleep_(1.second) ++ Stream.eval_(kcRef.get flatMap { kc => publishNMessages(kc, ProtocolVersion.Kafka_0_8, 20, 40) })
+          )).take(10)
         }
       } runLog ) unsafeRun).map { _.copy(tail = offset(0)) } shouldBe generateTopicMessages(20, 30, 0)
     }
@@ -110,14 +103,12 @@ class KafkaClientSubscribeSpec extends Fs2KafkaRuntimeSpec {
       ((withKafkaCluster(KafkaRuntimeRelease.V_8_2_0) flatMap { nodes =>
 
         Stream.eval(createKafkaTopic(nodes.broker1DockerId, testTopicA, replicas = 3)) >>
-          Stream.eval(Task.delay { println("XXXR CREATED TOPIC") }) >>
+        Stream.eval(Task.delay { println("XXXR CREATED TOPIC") }) >>
+        KafkaClient(Set(localBroker1_9092), ProtocolVersion.Kafka_0_8, "test-client") flatMap { kc =>
           time.sleep(1.second) >>
-          Stream.eval(publishNMessages(ProtocolVersion.Kafka_0_8, localBroker2_9192, 0, 20)) >> Stream.suspend {
-          println(s"XXXR PUBLISHED messages")
-          KafkaClient(Set(localBroker1_9092), ProtocolVersion.Kafka_0_8, "test-client") flatMap { kc =>
-            kc.subscribe(testTopicA, part0, offset(0l)).take(10)
-          }
-        }
+          Stream.eval(publishNMessages(kc, ProtocolVersion.Kafka_0_8, 0, 20, quorum = true)) >>
+          kc.subscribe(testTopicA, part0, offset(0l))
+        } take(10)
       } runLog ) unsafeRun) shouldBe generateTopicMessages(0, 10, 20)
 
     }

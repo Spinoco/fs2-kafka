@@ -2,7 +2,7 @@ package spinoco.fs2.kafka
 
 import java.net.InetAddress
 
-import fs2.{Stream, Task}
+import fs2._
 import shapeless.tag
 import shapeless.tag.@@
 import spinoco.fs2.kafka.state.BrokerAddress
@@ -15,7 +15,7 @@ object Fs2KafkaRuntimeSpec {
   val ZookeeperImage = "jplock/zookeeper:3.4.8"
   val DefaultZkPort:Int = 2181
 
-  val Kafka8Image = "wurstmeister/kafka:0.8.2.0"
+  val Kafka8Image =  "wurstmeister/kafka:0.8.2.0"
   val Kafka9Image = "wurstmeister/kafka:0.9.0.1"
   val Kafka10Image = "wurstmeister/kafka:0.10.0.0"
 }
@@ -28,7 +28,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   import DockerSupport._
   import Fs2KafkaRuntimeSpec._
 
-  lazy val thisLocalHost:InetAddress = {
+  lazy val thisLocalHost: InetAddress = {
     val addr = InetAddress.getLocalHost
     if (addr == null) throw new Exception("Localhost cannot be identified")
     addr
@@ -37,9 +37,9 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   val testTopicA = topic("test-topic-A")
   val part0 = partition(0)
 
-  val localBroker1_9092 = BrokerAddress("127.0.0.1", 9092)
-  val localBroker2_9192 = BrokerAddress("127.0.0.1", 9192)
-  val localBroker3_9292 = BrokerAddress("127.0.0.1", 9292)
+  val localBroker1_9092 = BrokerAddress(thisLocalHost.getHostAddress, 9092)
+  val localBroker2_9192 = BrokerAddress(thisLocalHost.getHostAddress, 9192)
+  val localBroker3_9292 = BrokerAddress(thisLocalHost.getHostAddress, 9292)
 
   implicit lazy val logger: Logger[Task] = new Logger[Task] {
     def log(level: Logger.Level.Value, msg: => String, throwable: Throwable): Task[Unit] =
@@ -64,8 +64,6 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
       _ <- installImageWhenNeeded(ZookeeperImage)
       runId <- runImage(ZookeeperImage,None)(
         "--restart=no"
-        , "--network=test-kafka"
-        , "--name=zookeeper"
         , s"-p $port:$port/tcp"
       )
     } yield runId
@@ -84,14 +82,13 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
       _ <- installImageWhenNeeded(image)
       params = Seq(
         "--restart=no"
-        , "--network=test-kafka"
-        , s"--name=broker$brokerId"
         , s"""--env KAFKA_PORT=$port"""
         , s"""--env KAFKA_BROKER_ID=$brokerId"""
-        , s"""--env KAFKA_ADVERTISED_HOST_NAME=broker$brokerId"""
+        , s"""--env KAFKA_ADVERTISED_HOST_NAME=${thisLocalHost.getHostAddress}"""
         , s"""--env KAFKA_ADVERTISED_PORT=$port"""
-        , s"""--env KAFKA_ZOOKEEPER_CONNECT=zookeeper:$zkPort"""
+        , s"""--env KAFKA_ZOOKEEPER_CONNECT=${thisLocalHost.getHostAddress}:$zkPort"""
         , s"-p $port:$port/tcp"
+
       )
       runId <- runImage(image,None)(params :_*)
     } yield runId
@@ -116,7 +113,6 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   /** process emitting once docker id of zk and kafka in singleton (one node) **/
   def withKafkaSingleton(version: KafkaRuntimeRelease.Value):Stream[Task,(String @@ DockerId, String @@ DockerId)] = {
-
     Stream.bracket(startZk())(
       zkId => awaitZKStarted(zkId) ++ Stream.bracket(startK(version, 1))(
         kafkaId => awaitKStarted(version, kafkaId) ++ Stream.emit(zkId -> kafkaId)
@@ -124,7 +120,6 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
       )
       , stopImage
     )
-
   }
 
   def startK(version: KafkaRuntimeRelease.Value, brokerId: Int, links: Map[String, String @@ DockerId] = Map.empty):Task[String @@ DockerId] = {
@@ -189,7 +184,6 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   /** start 3 node kafka cluster with zookeeper **/
   def withKafkaCluster(version: KafkaRuntimeRelease.Value): Stream[Task, KafkaNodes] = {
 
-    Stream.eval_(createNetwork("test-kafka")) ++
     Stream.bracket(startZk())(
       zkId => {
         awaitZKStarted(zkId) ++ Stream.bracket(startK(version, 1))(
@@ -204,7 +198,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
         )
       }
       , stopImage
-    ).onFinalize(removeNetwork("test-kafka"))
+    )
 
   }
 
