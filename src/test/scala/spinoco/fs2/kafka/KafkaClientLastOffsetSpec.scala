@@ -12,10 +12,31 @@ import spinoco.protocol.kafka._
 
 import scala.concurrent.duration._
 
-/**
-  * Created by pach on 29/05/17.
-  */
-class KafkaClientLastOffsetSpec extends Fs2KafkaRuntimeSpec {
+
+
+class KafkaClientLastOffset0802_P_08_Spec extends KafkaClientLastOffset(KafkaRuntimeRelease.V_8_2_0, ProtocolVersion.Kafka_0_8)
+
+class KafkaClientLastOffset0901_P_08_Spec extends KafkaClientLastOffset(KafkaRuntimeRelease.V_0_9_0_1, ProtocolVersion.Kafka_0_8)
+class KafkaClientLastOffset0901_P_09_Spec extends KafkaClientLastOffset(KafkaRuntimeRelease.V_0_9_0_1, ProtocolVersion.Kafka_0_9)
+
+class KafkaClientLastOffset1000_P_08_Spec extends KafkaClientLastOffset(KafkaRuntimeRelease.V_0_10_0, ProtocolVersion.Kafka_0_8)
+class KafkaClientLastOffset1000_P_09_Spec extends KafkaClientLastOffset(KafkaRuntimeRelease.V_0_10_0, ProtocolVersion.Kafka_0_9)
+class KafkaClientLastOffset1000_P_10_Spec extends KafkaClientLastOffset(KafkaRuntimeRelease.V_0_10_0, ProtocolVersion.Kafka_0_10)
+
+class KafkaClientLastOffset1001_P_08_Spec extends KafkaClientLastOffset(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_8)
+class KafkaClientLastOffset1001_P_09_Spec extends KafkaClientLastOffset(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_9)
+class KafkaClientLastOffset1001_P_10_Spec extends KafkaClientLastOffset(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_10)
+class KafkaClientLastOffset1001_P_101_Spec extends KafkaClientLastOffset(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_10_1)
+
+class KafkaClientLastOffset1002_P_08_Spec extends KafkaClientLastOffset(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_8)
+class KafkaClientLastOffset1002_P_09_Spec extends KafkaClientLastOffset(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_9)
+class KafkaClientLastOffset1002_P_10_Spec extends KafkaClientLastOffset(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10)
+class KafkaClientLastOffset1002_P_101_Spec extends KafkaClientLastOffset(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10_1)
+
+
+abstract class KafkaClientLastOffset(val runtime: KafkaRuntimeRelease.Value, val protocol: ProtocolVersion.Value) extends Fs2KafkaRuntimeSpec {
+
+  val version = s"$runtime[$protocol]"
 
 
   def publishOneMessage(address: BrokerAddress, k: ByteVector, v: ByteVector): Task[Unit] = {
@@ -37,7 +58,7 @@ class KafkaClientLastOffsetSpec extends Fs2KafkaRuntimeSpec {
   }
 
 
-  "Last Offset (single broker)" - {
+  s"$version: Last Offset (single broker)" - {
 
     "queries when topic is empty"  in {
       ((withKafkaSingleton(KafkaRuntimeRelease.V_8_2_0) flatMap { case (zkDockerId, kafkaDockerId) =>
@@ -46,7 +67,7 @@ class KafkaClientLastOffsetSpec extends Fs2KafkaRuntimeSpec {
               Stream.eval(kc.offsetRangeFor(testTopicA, tag[PartitionId](0)))
             }
           }
-        } runLog ) unsafeRun) shouldBe Vector(offset(-1))
+        } runLog ) unsafeRun) shouldBe Vector((offset(0), offset(0)))
     }
 
 
@@ -58,7 +79,7 @@ class KafkaClientLastOffsetSpec extends Fs2KafkaRuntimeSpec {
             Stream.eval(kc.offsetRangeFor(testTopicA, tag[PartitionId](0)))
           }
         }
-      } runLog ) unsafeRun) shouldBe Vector(offset(-1))
+      } runLog ) unsafeRun) shouldBe Vector((offset(0), offset(1)))
     }
 
 

@@ -10,7 +10,7 @@ import spinoco.protocol.kafka.Message.SingleMessage
 import spinoco.protocol.kafka.Request._
 import spinoco.protocol.kafka.Response._
 import spinoco.protocol.kafka._
-import spinoco.fs2.kafka.partition
+import spinoco.fs2.kafka.{KafkaRuntimeRelease, partition}
 
 import scala.concurrent.duration._
 

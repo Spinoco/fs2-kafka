@@ -6,12 +6,32 @@ import spinoco.protocol.kafka.{Compression, ProtocolVersion}
 
 import scala.concurrent.duration._
 
-/**
-  * Created by pach on 05/06/17.
-  */
-class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
+class KafkaClientPublish_0802_P_08_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_8_2_0, ProtocolVersion.Kafka_0_8)
 
-  "single-broker" - {
+class KafkaClientPublish_0901_P_08_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_9_0_1, ProtocolVersion.Kafka_0_8)
+class KafkaClientPublish_0901_P_09_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_9_0_1, ProtocolVersion.Kafka_0_9)
+
+class KafkaClientPublish_1000_P_08_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_0, ProtocolVersion.Kafka_0_8)
+class KafkaClientPublish_1000_P_09_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_0, ProtocolVersion.Kafka_0_9)
+class KafkaClientPublish_1000_P_10_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_0, ProtocolVersion.Kafka_0_10)
+
+class KafkaClientPublish_1001_P_08_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_8)
+class KafkaClientPublish_1001_P_09_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_9)
+class KafkaClientPublish_1001_P_10_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_10)
+class KafkaClientPublish_1001_P_101_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_10_1)
+
+class KafkaClientPublish_1002_P_08_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_8)
+class KafkaClientPublish_1002_P_09_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_9)
+class KafkaClientPublish_1002_P_10_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10)
+class KafkaClientPublish_1002_P_101_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10_1)
+
+
+abstract class KafkaClientPublish(val runtime: KafkaRuntimeRelease.Value, val protocol: ProtocolVersion.Value) extends Fs2KafkaRuntimeSpec {
+
+  val version = s"$runtime[$protocol]"
+  
+
+  s"$version: single-broker" - {
 
     "publish-unsafe" in {
 
@@ -141,30 +161,6 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
 
   }
 
-  "cluster" - {
 
-
-    "publish-response" in {
-      def publish(kc: KafkaClient[Task]) = {
-        Stream.range(0, 10) evalMap { idx =>
-          kc.publish1(testTopicA, part0, ByteVector(1),  ByteVector(idx), requireQuorum = true, serverAckTimeout = 3.seconds)
-        } map (Left(_))
-      }
-
-      ((withKafkaCluster(KafkaRuntimeRelease.V_8_2_0) flatMap { nodes =>
-        Stream.eval(createKafkaTopic(nodes.broker1DockerId, testTopicA)) >>
-          time.sleep(1.second) >> {
-          KafkaClient(Set(localBroker1_9092), ProtocolVersion.Kafka_0_8, "test-client") flatMap { kc =>
-            publish(kc) ++
-              (kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_)))
-          } take 20
-        }
-      } runLog  ) unsafeRun) shouldBe
-        (for { idx <- 0 until 10} yield Left(offset(idx))).toVector ++
-          (for { idx <- 0 until 10} yield Right(TopicMessage(offset(idx), ByteVector(1), ByteVector(idx), offset(10)))).toVector
-    }
-
-
-  }
 
 }

@@ -3,12 +3,14 @@ package spinoco.fs2.kafka
 import java.net.InetAddress
 
 import fs2._
+import scodec.bits.ByteVector
 import shapeless.tag
 import shapeless.tag.@@
 import spinoco.fs2.kafka.state.BrokerAddress
 import spinoco.protocol.kafka.{Broker, TopicName}
 
 import scala.sys.process.Process
+import scala.concurrent.duration._
 
 
 object Fs2KafkaRuntimeSpec {
@@ -16,9 +18,20 @@ object Fs2KafkaRuntimeSpec {
   val DefaultZkPort:Int = 2181
 
   val Kafka8Image =  "wurstmeister/kafka:0.8.2.0"
-  val Kafka9Image = "wurstmeister/kafka:0.9.0.1"
+  val Kafka9Image =  "wurstmeister/kafka:0.9.0.1"
   val Kafka10Image = "wurstmeister/kafka:0.10.0.0"
+  val Kafka101Image = "wurstmeister/kafka:0.10.1.0"
+  val Kafka102Image = "wurstmeister/kafka:0.10.2.0"
 }
+
+object KafkaRuntimeRelease extends Enumeration {
+  val V_8_2_0 = Value
+  val V_0_9_0_1 = Value
+  val V_0_10_0 = Value
+  val V_0_10_1 = Value
+  val V_0_10_2 = Value
+}
+
 
 /**
   * Specification that will start kafka runtime before tests are performed.
@@ -46,12 +59,6 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
       Task.delay { println(s"$level: $msg"); if (throwable != null) throwable.printStackTrace() }
   }
 
-
-  object KafkaRuntimeRelease extends Enumeration {
-    val V_8_2_0 = Value
-    val V_0_9_0_1 = Value
-    val V_0_10_0 = Value
-  }
 
 
   /**
@@ -128,6 +135,8 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
       case KafkaRuntimeRelease.V_8_2_0 => startKafka(Kafka8Image, port = port, brokerId = brokerId, links = links)
       case KafkaRuntimeRelease.V_0_9_0_1 => startKafka(Kafka9Image, port = port, brokerId = brokerId, links = links)
       case KafkaRuntimeRelease.V_0_10_0 => startKafka(Kafka10Image, port = port, brokerId = brokerId, links = links)
+      case KafkaRuntimeRelease.V_0_10_1 => startKafka(Kafka101Image, port = port, brokerId = brokerId, links = links)
+      case KafkaRuntimeRelease.V_0_10_2 => startKafka(Kafka102Image, port = port, brokerId = brokerId, links = links)
     }
   }
 
@@ -148,6 +157,14 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
       case KafkaRuntimeRelease.V_0_10_0 =>
         followImageLog(kafkaId).takeWhile(! _.contains("New leader is "))
           .map(println).drain
+
+      case KafkaRuntimeRelease.V_0_10_1 =>
+        followImageLog(kafkaId).takeWhile(! _.contains("New leader is "))
+          .map(println).drain
+
+      case KafkaRuntimeRelease.V_0_10_2 =>
+        followImageLog(kafkaId).takeWhile(! _.contains("New leader is "))
+          .map(println).drain
     }
   }
 
@@ -162,6 +179,14 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
           .map(println).drain
 
       case KafkaRuntimeRelease.V_0_10_0 =>
+        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started"))
+          .map(println).drain
+
+      case KafkaRuntimeRelease.V_0_10_1 =>
+        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started"))
+          .map(println).drain
+
+      case KafkaRuntimeRelease.V_0_10_2 =>
         followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started"))
           .map(println).drain
     }
@@ -187,9 +212,9 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
     Stream.bracket(startZk())(
       zkId => {
         awaitZKStarted(zkId) ++ Stream.bracket(startK(version, 1))(
-          broker1 => awaitKStarted(version, broker1) ++ Stream.bracket(startK(version, 2, Map("broker_1" -> broker1)))(
-            broker2 => awaitKFollowerReady(version, broker2, 2) ++ Stream.bracket(startK(version, 3, Map("broker_2" -> broker2)))(
-              broker3 => awaitKFollowerReady(version, broker3, 3) ++ Stream.emit(KafkaNodes(zkId, Map(tag[Broker](1) -> broker1, tag[Broker](2) -> broker2, tag[Broker](3) -> broker3)))
+          broker1 => awaitKStarted(version, broker1) ++ time.sleep_(2.seconds) ++ Stream.bracket(startK(version, 2, Map("broker_1" -> broker1)))(
+            broker2 => awaitKFollowerReady(version, broker2, 2) ++ time.sleep_(2.seconds) ++ Stream.bracket(startK(version, 3, Map("broker_2" -> broker2)))(
+              broker3 => awaitKFollowerReady(version, broker3, 3) ++ time.sleep_(2.seconds) ++ Stream.emit(KafkaNodes(zkId, Map(tag[Broker](1) -> broker1, tag[Broker](2) -> broker2, tag[Broker](3) -> broker3)))
               , stopImage
             )
             , stopImage
@@ -200,6 +225,22 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
       , stopImage
     )
 
+  }
+
+
+  def publishNMessages(client: KafkaClient[Task],from: Int, to: Int, quorum: Boolean = false): Task[Unit] = {
+
+    Stream.range(from, to).evalMap { idx =>
+      client.publish1(testTopicA, part0, ByteVector(1),  ByteVector(idx), quorum, 10.seconds)
+    }
+    .run
+
+  }
+
+  def generateTopicMessages(from: Int, to: Int, tail: Long): Vector[TopicMessage] = {
+    ((from until to) map { idx =>
+      TopicMessage(offset(idx.toLong), ByteVector(1), ByteVector(idx), offset(tail) )
+    }) toVector
   }
 
 

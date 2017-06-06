@@ -650,7 +650,7 @@ object KafkaClient {
               case Some(err) => F.fail(BrokerReportedFailure(broker.address, requestOffsetDataMin, err))
               case None =>
                 val offsets = results.flatMap { _.offsets } map { o => (o: Long) }
-                if (offsets.isEmpty) F.fail(new Throwable(s"Invalid response. No offsets available: $responses"))
+                if (offsets.isEmpty) F.fail(new Throwable(s"Invalid response. No offsets available: $responses, min: $requestOffsetDataMin, max: $requestOffsetDataMax"))
                 else F.pure ((offset(offsets.min), offset(offsets.max)))
             }
           }

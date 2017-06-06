@@ -6,7 +6,7 @@ import java.util.Date
 import fs2._
 import scodec.bits.ByteVector
 import shapeless.tag
-import spinoco.fs2.kafka.partition
+import spinoco.fs2.kafka.{KafkaRuntimeRelease, partition}
 import spinoco.protocol.kafka.Message.SingleMessage
 import spinoco.protocol.kafka.Request._
 import spinoco.protocol.kafka.Response._
