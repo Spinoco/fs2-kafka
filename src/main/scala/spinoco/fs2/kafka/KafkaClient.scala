@@ -36,14 +36,17 @@ sealed trait KafkaClient[F[_]] {
     *
     * Essentially this acts sort of unix `tail` command.
     *
-    * Emits empty stream, if :
     *
-    *  - topic and/or partition does not exist
-    *  - offset is larger than maximum offset known to topic/partition and `followTail` is set to false
+    * Note that user can fine-tune reads from topic by specifying `minChunkByteSize`, `maxChunkByteSize` and `maxWaitTime` parameters
+    * to optimize chunking and flow control of reads from Kafka. Default values provide polling each 1 minute whenever at least one message is available.
     *
+    * User can by fine-tuning the maxWaitTime and `leaderFailureMaxAttempts` recovery in case of leadership changes in kafka cluster.
     *
-    *  Note that user can fine-tune reads from topic by specifying `minChunkByteSize`, `maxChunkByteSize` and `maxWaitTime` parameters
-    *  to optimize chunking and flow control of reads from Kafka. Default values provide polling each 1 minute whenever at least one message is available.
+    * For example, when leader fails, the stream will stop for about `leaderFailureTimeout` and then tries to continue where the last fetch ended.
+    * However wehn there are leaderFailureMaxAttempts successive failures, then the stream will fail.
+    *
+    * Setting `leaderFailureTimeout` to 0 and `leaderFailureMaxAttempts` to 0 will cause resulting stream to fail immediatelly when any failure occurs.
+    *
     *
     * @param topicId          Name of the topic to subscribe to
     * @param partition        Partition to subscribe to
@@ -54,6 +57,8 @@ sealed trait KafkaClient[F[_]] {
     * @param minChunkByteSize Min size of bytes to read from kafka in single attempt. That number of bytes must be available, in order for read to succeed.
     * @param maxChunkByteSize Max number of bytes to include in reply. Should be always > than max siz of single message including key.
     * @param maxWaitTime      Maximum time to wait before reply, even when `minChunkByteSize` is not satisfied.
+    * @param leaderFailureTimeout When fetch from Kafka leader fails, this will try to recover connection every this period up to `leaderFailureMaxAttempts` attempt count is exhausted
+    * @param leaderFailureMaxAttempts  Maximum attempts to recover from leader failure, then this will fail.
     * @return
     */
   def subscribe(
@@ -64,6 +69,8 @@ sealed trait KafkaClient[F[_]] {
     , minChunkByteSize: Int = 1
     , maxChunkByteSize: Int = 1024 * 1024
     , maxWaitTime: FiniteDuration = 1.minute
+    , leaderFailureTimeout: FiniteDuration = 5.seconds
+    , leaderFailureMaxAttempts: Int = 3
   ): Stream[F, TopicMessage]
 
 
@@ -237,9 +244,10 @@ object KafkaClient {
         , protocol = protocol
         , clientId = s"$clientName-produce"
         , failureDelay = brokerRetryDelay
-        , refreshMeta = impl.refreshMetronome(fetchMeta, signal, brokerRetryDelay)
+        , refreshMeta = impl.refreshMetadata(fetchMeta, signal)(_) as (())
         , topicId = topicId
         , partition = partitionId
+        , refreshMetaDelay = metadataRefreshDelay
       )
     }
 
@@ -305,13 +313,33 @@ object KafkaClient {
 
         val client = new KafkaClient[F] {
 
-          def subscribe(topicId: @@[String, TopicName], partition: @@[Int, PartitionId], offset: @@[Long, Offset], prefetch: Boolean, minChunkByteSize: Int, maxChunkByteSize: Int, maxWaitTime: FiniteDuration): Stream[F, TopicMessage] =
-            subscribePartition(topicId, partition, offset, prefetch, minChunkByteSize, maxChunkByteSize, maxWaitTime, stateSignal, fetchConnection, refreshMeta, queryOffsetRange)
+          def subscribe(
+             topicId: @@[String, TopicName]
+             , partition: @@[Int, PartitionId]
+             , offset: @@[Long, Offset]
+             , prefetch: Boolean
+             , minChunkByteSize: Int
+             , maxChunkByteSize: Int
+             , maxWaitTime: FiniteDuration
+             , leaderFailureTimeout: FiniteDuration
+             , leaderFailureMaxAttempts: Int
+           ): Stream[F, TopicMessage] =
+            subscribePartition(topicId, partition, offset, prefetch, minChunkByteSize, maxChunkByteSize, maxWaitTime, stateSignal, fetchConnection, refreshMeta, queryOffsetRange, leaderFailureTimeout, leaderFailureMaxAttempts)
 
-          def offsetRangeFor(topicId: @@[String, TopicName], partition: @@[Int, PartitionId]): F[(Long @@ Offset, Long @@ Offset)] =
+          def offsetRangeFor(
+            topicId: @@[String, TopicName]
+            , partition: @@[Int, PartitionId]
+          ): F[(Long @@ Offset, Long @@ Offset)] =
             queryOffsetRange(topicId, partition)
 
-          def publishN(topicId: String @@ TopicName, partition: Int @@ PartitionId, requireQuorum: Boolean, serverAckTimeout: FiniteDuration, compress: Option[Compression.Value])(messages: Seq[(ByteVector, ByteVector)]): F[Long] = {
+          def publishN(
+            topicId: String @@ TopicName
+            , partition: Int @@ PartitionId
+            , requireQuorum: Boolean
+            , serverAckTimeout: FiniteDuration
+            , compress: Option[Compression.Value]
+          )(messages: Seq[(ByteVector, ByteVector)]): F[Long] = {
+
             val toPublish = preparePublishMessages(messages, compress)
             val requiredAcks = if (requireQuorum) RequiredAcks.Quorum else RequiredAcks.LocalOnly
             publisher.publish(topicId, partition, toPublish, serverAckTimeout, requiredAcks) flatMap {
@@ -320,7 +348,11 @@ object KafkaClient {
             }
           }
 
-          def publishUnsafeN(topicId: @@[String, TopicName], partition: @@[Int, PartitionId], compress: Option[Compression.Value])(messages: Seq[(ByteVector, ByteVector)]): F[Unit] = {
+          def publishUnsafeN(
+            topicId: @@[String, TopicName]
+            , partition: @@[Int, PartitionId]
+            , compress: Option[Compression.Value]
+          )(messages: Seq[(ByteVector, ByteVector)]): F[Unit] = {
             val toPublish = preparePublishMessages(messages, compress)
             publisher.publish(topicId, partition, toPublish, NoResponseTimeout, RequiredAcks.NoResponse) as (())
           }
@@ -415,8 +447,11 @@ object KafkaClient {
           case None => F.fail(NoBrokerAvailable)
           case Some(broker) =>
             brokerConnection(broker.address, MetadataRequest(Vector(topicId))).attempt flatMap {
-              case Left(err) => go(remains.tail)
               case Right(resp) => stateSignal.modify(updateClientState(resp)).map(_.now)
+              case Left(err) =>
+                println(s"XXXR ERROR REFRESH META: $err")
+                go(remains.tail)
+
             }
         }
       }
@@ -514,13 +549,33 @@ object KafkaClient {
       , brokerConnection: BrokerAddress => Pipe[F, FetchRequest, (FetchRequest, FetchResponse)]
       , refreshMeta     : (String @@ TopicName) => F[ClientState]
       , queryOffsetRange : (String @@ TopicName, Int @@ PartitionId) => F[(Long @@ Offset, Long @@ Offset)]
-    )(implicit F: Async[F], Logger: Logger[F]): Stream[F, TopicMessage] = {
+      , leaderFailureTimeout: FiniteDuration
+      , leaderFailureMaxAttempts: Int
+    )(implicit F: Async[F], S: Scheduler, Logger: Logger[F]): Stream[F, TopicMessage] = {
 
-      Stream.eval(F.refOf(firstOffset)) flatMap { startFromRef =>
+      def updateLeader: Stream[F, Option[BrokerData]] =
+        Stream.eval(refreshMeta(topicId) map { _.leaderFor(topicId, partition) })
+
+      Stream.eval(F.refOf((firstOffset, 0))) flatMap { startFromRef =>
         def fetchFromBroker(broker: BrokerData): Stream[F, TopicMessage] = {
+          def tryRecover(rsn: Throwable): Stream[F, TopicMessage] = {
+            Stream.eval(startFromRef.get map { _._2 }) flatMap { failures =>
+              if (failures >= leaderFailureMaxAttempts) Stream.fail(rsn)
+              else {
+                Stream.eval(startFromRef.modify { case (start, failures) => (start, failures + 1) }) >>
+                time.sleep(leaderFailureTimeout) >>
+                Stream.eval(refreshMeta(topicId) map { _.leaderFor(topicId, partition) }) flatMap {
+                  case None => tryRecover(LeaderNotAvailable(topicId, partition))
+                  case Some(leader) => fetchFromBroker(leader)
+                }
+
+              }
+            }
+          }
+
           Stream.eval(async.unboundedQueue[F, FetchRequest]) flatMap { requestQueue =>
             def requestNextChunk: F[Unit] = {
-              startFromRef.get flatMap { startFrom =>
+              startFromRef.get map { _._1 } flatMap { startFrom =>
                 requestQueue.enqueue1(
                   FetchRequest(consumerBrokerId, maxWaitTime, minChunkByteSize, Vector((topicId, Vector((partition, startFrom, maxChunkByteSize)))))
                 )
@@ -528,7 +583,7 @@ object KafkaClient {
             }
 
             Stream.eval(requestNextChunk) >>
-            (requestQueue.dequeue through brokerConnection(broker.address)) flatMap { case (request, fetch) =>
+            ((requestQueue.dequeue through brokerConnection(broker.address)) flatMap { case (request, fetch) =>
               fetch.data.find(_._1 == topicId).flatMap(_._2.find(_.partitionId == partition)) match {
                 case None =>
                   Stream.fail(InvalidBrokerResponse(broker.address, "FetchResponse", request, Some(fetch)))
@@ -543,7 +598,7 @@ object KafkaClient {
 
                       val updateLastKnown = messages.lastOption.map(m => m.offset) match {
                         case None => Stream.empty // No messages emitted, just go on
-                        case Some(lastOffset) => Stream.eval_(startFromRef.modify(_ => offset(lastOffset + 1)))
+                        case Some(lastOffset) => Stream.eval_(startFromRef.modify { _ => (offset(lastOffset + 1), 0) })
                       }
                       updateLastKnown ++ {
                         if (prefetch) Stream.eval_(requestNextChunk) ++ Stream.emits(messages)
@@ -551,32 +606,30 @@ object KafkaClient {
                       }
                   }
               }
+            }) ++ {
+              // in normal situations this append shall never be consulted. But the broker may close connection from its side
+              // and in that case we need to start querying from the last unfinished request or eventually continue from the
+              // as such we fail there and OnError shall handle failure of early termination from broker
+              Stream.fail(new Throwable(s"Leader closed connection early: $broker ($topicId, $partition)"))
             }
 
           } onError {
-            case err: LeaderNotAvailable =>
-              // likely leader may have changed, lets refresh meta and try to query one
-              Stream.eval(refreshMeta(topicId) map { _.leaderFor(topicId, partition) }) flatMap {
-                case None => Stream.fail(err)
-                case Some(nextBroker) =>
-                  if (nextBroker.brokerId == broker.brokerId) Stream.fail(err)
-                  else fetchFromBroker(nextBroker)
-              }
+            case err: LeaderNotAvailable => tryRecover(err)
 
             case err: BrokerReportedFailure => err.failure match {
               case ErrorType.OFFSET_OUT_OF_RANGE =>
                 Stream.eval(queryOffsetRange(topicId, partition)) flatMap { case (min, max) =>
-                Stream.eval(startFromRef.get) flatMap { startFrom =>
+                Stream.eval(startFromRef.get) flatMap { case (startFrom, _) =>
                   println(s"XXXR $startFrom ($min, $max)")
-                  if (startFrom < min) Stream.eval(startFromRef.modify(_ => min)) >> fetchFromBroker(broker)
-                  else if (startFrom > max) Stream.eval(startFromRef.modify(_ => max)) >> fetchFromBroker(broker)
+                  if (startFrom < min) Stream.eval(startFromRef.modify(_ => (min, 0))) >> fetchFromBroker(broker)
+                  else if (startFrom > max) Stream.eval(startFromRef.modify(_ => (max, 0))) >> fetchFromBroker(broker)
                   else Stream.fail(new Throwable(s"Offset supplied is in acceptable range, but still not valid: $startFrom ($min, $max)", err))
                 }}
 
-              case other => Stream.fail(err)
+              case other => tryRecover(err)
             }
 
-            case other => Stream.fail(other)
+            case other => tryRecover(other)
           }
         }
 
@@ -686,13 +739,14 @@ object KafkaClient {
       * Connection is open once the topic and partition will get first produce request to serve.
       * @param connection     Function handling connection to Kafka Broker
       * @param topicId        Id of the topic
-      * @param partition      Id of the prtition
+      * @param partition      Id of the partition
       * @param stateSignal    Signal of the state
       * @param protocol       Protocol
       * @param clientId       Id of the client
       * @param failureDelay   When leader fails, that much time will be delayed before new broker will be checked and processing of messages will be restarted.
       *                       This prevents from situations, where leader failed and new leader was not yet elected.
-      * @param refreshMeta    A stream, that causes when run periodically refresh metadata for supplied topic
+      * @param refreshMeta    A F, that causes when run to refresh metadata for supplied topic
+      * @param refreshMetaDelay A delay that in case there is no leader refreshes metadata
       */
     def publishLeaderConnection[F[_]](
       connection: BrokerAddress => Pipe[F, RequestMessage, ResponseMessage]
@@ -700,9 +754,10 @@ object KafkaClient {
       , protocol:  ProtocolVersion.Value
       , clientId: String
       , failureDelay: FiniteDuration
-      , refreshMeta: (String @@ TopicName) => Stream[F, Unit]
+      , refreshMeta: (String @@ TopicName) => F[Unit]
       , topicId: String @@ TopicName
       , partition: Int @@ PartitionId
+      , refreshMetaDelay: FiniteDuration
     )(implicit F: Async[F], S: Scheduler, L: Logger[F]) : F[PartitionPublishConnection[F]] = {
       type Response = Option[(Long @@ Offset, Option[Date])]
       println(s"XXXM CREATING LEADER CONNECTION CALL: $partition, $topicId")
@@ -748,17 +803,19 @@ object KafkaClient {
         //
         //
         val runner =
-          (stateSignal.discrete.map( _.leaderFor(topicId, partition) ) flatMap {
+          (stateSignal.continuous.map( _.leaderFor(topicId, partition) ) flatMap {
 
             case None =>
+              println(s"XXXR LEADER FOR $topicId[$partition] not available, awaiting it to become available")
               // leader is not available just quickly terminate the requests, so they may be eventually rescheduled
               // once leader will be available this will get interrupted and we start again
               (queue.dequeue.evalMap { case (_, cb) =>
                 cb(Left(LeaderNotAvailable(topicId, partition)))
-              } mergeDrainR refreshMeta(topicId)) interruptWhen stateSignal.map(_.leaderFor(topicId, partition).nonEmpty)
+              } mergeDrainR (time.awakeEvery(refreshMetaDelay) evalMap { _ => refreshMeta(topicId) })  ) interruptWhen stateSignal.map(_.leaderFor(topicId, partition).nonEmpty)
 
 
             case Some(leader) =>
+              println(s"XXXR LEADER FOR $topicId[$partition] is $leader")
               Stream.eval_(F.delay(println(s"XXXXM RUNNING PROCESS for $topicId, $partition"))) ++
               ((queue.dequeue.zipWithIndex map { x => println(s"DEQ $topicId, $partition, $x"); x} evalMap (registerMessage _ tupled)) map { x => println(s"DEQR $leader $topicId, $partition, $x"); x}  through connection(leader.address)) flatMap { response =>
                 println(s"XXXY GOT  RESPONSE $response")
@@ -788,8 +845,13 @@ object KafkaClient {
                     toCancel.traverse(_._2 (fail))
                   }
                 } ++ time.sleep_(failureDelay)
+              } onFinalize {
+                // this seems that leader has hung up or connection failed.
+                // We shall refresh metadata just to make sure leader is still the same and retry to establish connection again
+                refreshMeta(topicId) >>
+                F.delay { println(s"CONNECTION WITH LEADER $topicId[$partition] TERMINATED") }
               }
-          } interruptWhen termSignal map { x => println("TERM SIGNAL RUNNER: $x"); x } ) onFinalize completeNotProcessed
+          } interruptWhen termSignal map { x => println(s"TERM SIGNAL RUNNER: $x"); x } ) onFinalize completeNotProcessed
 
 
         F.start(runner.run) as {

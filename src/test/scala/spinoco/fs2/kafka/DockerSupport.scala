@@ -73,6 +73,14 @@ object DockerSupport {
     }
   }
 
+  def runningImages: Task[Set[String @@ DockerId]] = Task.delay {
+    Process(s"docker ps -q").!!.lines.filter(_.trim.nonEmpty).map(tag[DockerId](_)).toSet
+  }
+
+  def availableImages: Task[Set[String @@ DockerId]] = Task.delay {
+    Process(s"docker ps -aq").!!.lines.filter(_.trim.nonEmpty).map(tag[DockerId](_)).toSet
+  }
+
   /**
     * Issues a kill to image with given id
     */

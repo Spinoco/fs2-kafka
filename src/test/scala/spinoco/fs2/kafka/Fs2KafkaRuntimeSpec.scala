@@ -3,11 +3,12 @@ package spinoco.fs2.kafka
 import java.net.InetAddress
 
 import fs2._
+import fs2.util.syntax._
 import scodec.bits.ByteVector
 import shapeless.tag
 import shapeless.tag.@@
 import spinoco.fs2.kafka.state.BrokerAddress
-import spinoco.protocol.kafka.{Broker, TopicName}
+import spinoco.protocol.kafka.{Broker, PartitionId, TopicName}
 
 import scala.sys.process.Process
 import scala.concurrent.duration._
@@ -79,11 +80,18 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   /** stops and cleans the given image **/
   def stopImage(zkImageId: String @@ DockerId):Task[Unit] = {
-    killImage(zkImageId).flatMap(_ => cleanImage(zkImageId))
+    runningImages flatMap { allRunning =>
+      if (allRunning.exists(zkImageId.startsWith)) killImage(zkImageId) >> cleanImage(zkImageId)
+      else availableImages flatMap { allAvailable =>
+        if (allAvailable.exists(zkImageId.startsWith)) cleanImage(zkImageId)
+        else Task.now(())
+      }
+    }
+
   }
 
   /** starts kafka. Kafka runs in host network **/
-  def startKafka(image: String, port: Int, zkPort: Int = DefaultZkPort, brokerId: Int = 1, links: Map[String, String @@ DockerId] = Map.empty): Task[String @@ DockerId] = {
+  def startKafka(image: String, port: Int, zkPort: Int = DefaultZkPort, brokerId: Int = 1): Task[String @@ DockerId] = {
     for {
       _ <- dockerVersion.flatMap(_.fold[Task[String]](Task.fail(new Throwable("Docker is not available")))(Task.now))
       _ <- installImageWhenNeeded(image)
@@ -129,14 +137,14 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
     )
   }
 
-  def startK(version: KafkaRuntimeRelease.Value, brokerId: Int, links: Map[String, String @@ DockerId] = Map.empty):Task[String @@ DockerId] = {
+  def startK(version: KafkaRuntimeRelease.Value, brokerId: Int):Task[String @@ DockerId] = {
     val port = 9092+ 100*(brokerId -1)
     version match {
-      case KafkaRuntimeRelease.V_8_2_0 => startKafka(Kafka8Image, port = port, brokerId = brokerId, links = links)
-      case KafkaRuntimeRelease.V_0_9_0_1 => startKafka(Kafka9Image, port = port, brokerId = brokerId, links = links)
-      case KafkaRuntimeRelease.V_0_10_0 => startKafka(Kafka10Image, port = port, brokerId = brokerId, links = links)
-      case KafkaRuntimeRelease.V_0_10_1 => startKafka(Kafka101Image, port = port, brokerId = brokerId, links = links)
-      case KafkaRuntimeRelease.V_0_10_2 => startKafka(Kafka102Image, port = port, brokerId = brokerId, links = links)
+      case KafkaRuntimeRelease.V_8_2_0 => startKafka(Kafka8Image, port = port, brokerId = brokerId)
+      case KafkaRuntimeRelease.V_0_9_0_1 => startKafka(Kafka9Image, port = port, brokerId = brokerId)
+      case KafkaRuntimeRelease.V_0_10_0 => startKafka(Kafka10Image, port = port, brokerId = brokerId)
+      case KafkaRuntimeRelease.V_0_10_1 => startKafka(Kafka101Image, port = port, brokerId = brokerId)
+      case KafkaRuntimeRelease.V_0_10_2 => startKafka(Kafka102Image, port = port, brokerId = brokerId)
     }
   }
 
@@ -212,8 +220,8 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
     Stream.bracket(startZk())(
       zkId => {
         awaitZKStarted(zkId) ++ Stream.bracket(startK(version, 1))(
-          broker1 => awaitKStarted(version, broker1) ++ time.sleep_(2.seconds) ++ Stream.bracket(startK(version, 2, Map("broker_1" -> broker1)))(
-            broker2 => awaitKFollowerReady(version, broker2, 2) ++ time.sleep_(2.seconds) ++ Stream.bracket(startK(version, 3, Map("broker_2" -> broker2)))(
+          broker1 => awaitKStarted(version, broker1) ++ time.sleep_(2.seconds) ++ Stream.bracket(startK(version, 2))(
+            broker2 => awaitKFollowerReady(version, broker2, 2) ++ time.sleep_(2.seconds) ++ Stream.bracket(startK(version, 3))(
               broker3 => awaitKFollowerReady(version, broker3, 3) ++ time.sleep_(2.seconds) ++ Stream.emit(KafkaNodes(zkId, Map(tag[Broker](1) -> broker1, tag[Broker](2) -> broker2, tag[Broker](3) -> broker3)))
               , stopImage
             )
@@ -241,6 +249,18 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
     ((from until to) map { idx =>
       TopicMessage(offset(idx.toLong), ByteVector(1), ByteVector(idx), offset(tail) )
     }) toVector
+  }
+
+
+  def killLeader(client: KafkaClient[Task], nodes: KafkaNodes, topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[Task, Nothing] = {
+    client.leaders.discrete.take(1) map { _((topic, partition)) } flatMap { leader =>
+      println(s"XXXR KILLING BROKER: $leader")
+      leader match {
+        case `localBroker1_9092` => Stream.eval_(killImage(nodes.nodes(tag[Broker](1))))
+        case `localBroker2_9192` => Stream.eval_(killImage(nodes.nodes(tag[Broker](2))))
+        case `localBroker3_9292` => Stream.eval_(killImage(nodes.nodes(tag[Broker](3))))
+      }
+    }
   }
 
 
