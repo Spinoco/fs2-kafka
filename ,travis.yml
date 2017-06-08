@@ -1,9 +1,8 @@
+language : scala
 sudo: required
 
 services:
   - docker
-
-language : scala
 
 scala:
   - 2.11.8
@@ -16,8 +15,6 @@ cache:
 
 jdk:
   - oraclejdk8
-
-
 
 script:
   - sbt ++$TRAVIS_SCALA_VERSION -Dfile.encoding=UTF8 test
