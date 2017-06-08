@@ -78,11 +78,11 @@ Note that resulting type of this program is Stream[F, ???], that means stream ne
 
 fs2-kafka has 4 possible ways to publish to topic. 
 
-- publish1 - publishes one message to topic and partition and awaits confirmation from leader 
-- publishN - publishes chunk of messages to topic / partition and awaits confrimtation from leader 
+- `publish1` - publishes one message to topic and partition and awaits confirmation from leader 
+- `publishN` - publishes chunk of messages to topic / partition and awaits confrimtation from leader 
 
-- publish1Unsafe - like publish1, except this won't confirm that publish was susccessfull 
-- publishNUnsafe - like publishN, except this won't confirm that publish was susccessfull 
+- `publish1Unsafe` - like publish1, except this won't confirm that publish was susccessfull 
+- `publishNUnsafe` - like publishN, except this won't confirm that publish was susccessfull 
 
 First two methods (`publish1` and `publishN`) allows to publish messages safely, that means once the message is published, the result contains the offset of first succesfully published message. Each of these two methods have two important parameters that has to be specified: 
 
@@ -223,7 +223,7 @@ When subscribing at `Tail`, the subscriber will receive any messages that haven 
 
 ## Design 
 
-fs2-kafka is very simple when it comes to internal architecture. Eventhough kafka supports a variaty of patterns, we have tried to choose simple architecture that in our opinion will fit most real-world use-cases. 
+fs2-kafka is very simple when it comes to internal architecture. Eventhough kafka supports a variaty of patterns, we choose simple, minimalistic architecture that in our opinion will fit most real-world use-cases. 
 
 ### Subscribers
 
