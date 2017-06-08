@@ -71,4 +71,7 @@ package object kafka {
   /** Starting from this offset will assure we starting with most recent messages written to topic (tail) **/
   val TailOffset = offset(Long.MaxValue)
 
+
+  def broker(host: String, port: Int): BrokerAddress = ???
+
 }

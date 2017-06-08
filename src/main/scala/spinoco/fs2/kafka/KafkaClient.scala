@@ -385,15 +385,14 @@ object KafkaClient {
       , fetchMetadata: (BrokerAddress, MetadataRequest) => F[MetadataResponse]
       , signal: mutable.Signal[F, ClientState]
     )(implicit F: Async[F], Logger: Logger[F]): F[Unit] = {
-        println(s"XXXY SEEDS $seeds")
         signal.get.map(_.brokers.values.map(_.address).toSet ++ seeds) flatMap { brokers =>
           (concurrent.join(Int.MaxValue)(
             Stream.emits(brokers.toSeq) map { broker =>
               Stream.eval(fetchMetadata(broker, MetadataRequest(Vector.empty))).attempt.flatMap { r => Stream.emits(r.right.toOption.toSeq) }
             }
           ) take 1 runLast) flatMap {
-            case Some(meta) => println(s"XXXY METADATA: $meta"); signal.modify(updateClientState(meta)) as (())
-            case None => println(s"XXXR NO META"); F.fail(NoBrokerAvailable)
+            case Some(meta) => signal.modify(updateClientState(meta)) as (())
+            case None => F.fail(NoBrokerAvailable)
           }
         }
     }
@@ -448,9 +447,7 @@ object KafkaClient {
           case Some(broker) =>
             brokerConnection(broker.address, MetadataRequest(Vector(topicId))).attempt flatMap {
               case Right(resp) => stateSignal.modify(updateClientState(resp)).map(_.now)
-              case Left(err) =>
-                println(s"XXXR ERROR REFRESH META: $err")
-                go(remains.tail)
+              case Left(err) => go(remains.tail)
 
             }
         }
@@ -620,7 +617,6 @@ object KafkaClient {
               case ErrorType.OFFSET_OUT_OF_RANGE =>
                 Stream.eval(queryOffsetRange(topicId, partition)) flatMap { case (min, max) =>
                 Stream.eval(startFromRef.get) flatMap { case (startFrom, _) =>
-                  println(s"XXXR $startFrom ($min, $max)")
                   if (startFrom < min) Stream.eval(startFromRef.modify(_ => (min, 0))) >> fetchFromBroker(broker)
                   else if (startFrom > max) Stream.eval(startFromRef.modify(_ => (max, 0))) >> fetchFromBroker(broker)
                   else Stream.fail(new Throwable(s"Offset supplied is in acceptable range, but still not valid: $startFrom ($min, $max)", err))
@@ -720,8 +716,7 @@ object KafkaClient {
       , clientId: String
     )(address: BrokerAddress, input: I)(implicit F: Async[F], T: Typeable[O]): F[O] = {
       F.ref[Attempt[Option[ResponseMessage]]] flatMap { ref =>
-        println(s"XXXY SENDING request: $input, expecting ${T.describe}")
-       F.start(((Stream.emit(RequestMessage(protocol, 1, clientId, input)) ++ Stream.eval(ref.get).drain) through f(address) take 1).runLast.attempt.flatMap { r => println(s"RESULT: $r"); ref.setPure(r) }) >>
+       F.start(((Stream.emit(RequestMessage(protocol, 1, clientId, input)) ++ Stream.eval(ref.get).drain) through f(address) take 1).runLast.attempt.flatMap { r => ref.setPure(r) }) >>
         ref.get flatMap {
           case Right(Some(response)) => T.cast(response.response) match {
             case Some(o) => F.pure(o)
@@ -760,11 +755,9 @@ object KafkaClient {
       , refreshMetaDelay: FiniteDuration
     )(implicit F: Async[F], S: Scheduler, L: Logger[F]) : F[PartitionPublishConnection[F]] = {
       type Response = Option[(Long @@ Offset, Option[Date])]
-      println(s"XXXM CREATING LEADER CONNECTION CALL: $partition, $topicId")
       async.signalOf[F, Boolean](false) flatMap { termSignal =>
       async.synchronousQueue[F, (ProduceRequest, Attempt[Response] => F[Unit])] flatMap { queue =>
       F.refOf[Map[Int, (ProduceRequest, Attempt[Response] => F[Unit])]](Map.empty) flatMap { ref =>
-        println(s"XXXM CREATING LEADER CONNECTION: $partition, $topicId")
         def registerMessage(in: (ProduceRequest, Attempt[Response] => F[Unit]), idx: Int): F[RequestMessage] = {
           val (produce, cb) = in
 
@@ -777,14 +770,13 @@ object KafkaClient {
 
           produce.requiredAcks match {
             case RequiredAcks.NoResponse => cb(Right(None)) as msg
-            case _ => ref.modify { _ + (idx -> ((produce, cb))) } map { c => println(s"XXXG REGISTERED: $c") } as msg
+            case _ => ref.modify { _ + (idx -> ((produce, cb))) } as msg
           }
 
 
         }
 
         def completeNotProcessed: F[Unit] = {
-          F.delay (println("XXXR RUNNER FINALIZED")) >>
           ref.modify(_ => Map.empty) map { _.previous.values } flatMap { toCancel =>
             val fail = Left(ClientTerminated)
             toCancel.toSeq.traverse(_._2 (fail)) as (())
@@ -806,7 +798,6 @@ object KafkaClient {
           (stateSignal.continuous.map( _.leaderFor(topicId, partition) ) flatMap {
 
             case None =>
-              println(s"XXXR LEADER FOR $topicId[$partition] not available, awaiting it to become available")
               // leader is not available just quickly terminate the requests, so they may be eventually rescheduled
               // once leader will be available this will get interrupted and we start again
               (queue.dequeue.evalMap { case (_, cb) =>
@@ -815,10 +806,8 @@ object KafkaClient {
 
 
             case Some(leader) =>
-              println(s"XXXR LEADER FOR $topicId[$partition] is $leader")
-              Stream.eval_(F.delay(println(s"XXXXM RUNNING PROCESS for $topicId, $partition"))) ++
-              ((queue.dequeue.zipWithIndex map { x => println(s"DEQ $topicId, $partition, $x"); x} evalMap (registerMessage _ tupled)) map { x => println(s"DEQR $leader $topicId, $partition, $x"); x}  through connection(leader.address)) flatMap { response =>
-                println(s"XXXY GOT  RESPONSE $response")
+              ((queue.dequeue.zipWithIndex evalMap (registerMessage _ tupled)) through connection(leader.address)) flatMap { response =>
+
                 Stream.eval(ref.modify2 { m => (m - response.correlationId, m.get(response.correlationId)) }) flatMap { case (c, found) => found match {
                   case None => Stream.fail(UnexpectedResponse(leader.address, response))
                   case Some((req, cb)) =>
@@ -848,17 +837,16 @@ object KafkaClient {
               } onFinalize {
                 // this seems that leader has hung up or connection failed.
                 // We shall refresh metadata just to make sure leader is still the same and retry to establish connection again
-                refreshMeta(topicId) >>
-                F.delay { println(s"CONNECTION WITH LEADER $topicId[$partition] TERMINATED") }
+                refreshMeta(topicId) as (())
               }
-          } interruptWhen termSignal map { x => println(s"TERM SIGNAL RUNNER: $x"); x } ) onFinalize completeNotProcessed
+          } interruptWhen termSignal ) onFinalize completeNotProcessed
 
 
         F.start(runner.run) as {
 
           new PartitionPublishConnection[F] {
 
-            def shutdown: F[Unit] = { println("XXXR sSHUTDOWN invoked"); termSignal.set(true)}
+            def shutdown: F[Unit] = termSignal.set(true)
 
             def publish(messages: Vector[Message], timeout: FiniteDuration, acks: RequiredAcks.Value): F[Option[(Long @@ Offset, Option[Date])]] = {
               F.ref[Attempt[Response]] flatMap { cbRef =>
@@ -905,20 +893,14 @@ object KafkaClient {
           }
 
           def publish(topic: String @@ TopicName, partition: Int @@ PartitionId, data: Vector[Message], timeout: FiniteDuration, acks: RequiredAcks.Value): F[Option[(Long @@ Offset, Option[Date])]] = {
-            println(s"XXX PUBLISHER $topic, $partition, $data")
-            stateRef.get map { x => println(s"XXX state is ($topic, $partition): $x"); x } map { _.connections.get((topic, partition)) } flatMap {
-              case Some(ppc) =>
-                println(s"XXX EXISTING PPC $topic, $partition")
-                ppc.publish(data, timeout, acks)
+            stateRef.get map { _.connections.get((topic, partition)) } flatMap {
+              case Some(ppc) =>   ppc.publish(data, timeout, acks)
               case None =>
                 // lets create a new connection and try to swap it in
-                println(s"XXX CREATING PPC $topic, $partition")
                 createPublisher(topic, partition) flatMap { ppc =>
-                  println(s"XXX CREATED PPC $topic, $partition")
                 stateRef.modify { s => if (s.shutdown) s else s.copy(connections = s.connections + ((topic, partition) -> ppc)) } flatMap { c =>
-                  println(s"XXX CREATED PPC MOD $topic, $partition, ${c.modified}")
-                    if (c.modified) publish(topic, partition, data, timeout, acks)
-                    else ppc.shutdown >> publish(topic, partition, data, timeout, acks)
+                  if (c.modified) publish(topic, partition, data, timeout, acks)
+                  else ppc.shutdown >> publish(topic, partition, data, timeout, acks)
                 }}
 
             }

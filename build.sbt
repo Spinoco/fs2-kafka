@@ -9,7 +9,7 @@ lazy val contributors = Seq(
 lazy val commonSettings = Seq(
    organization := "com.spinoco",
    scalaVersion := "2.11.8",
-   crossScalaVersions := Seq("2.11.8"),
+   crossScalaVersions := Seq("2.11.8",  "2.12.1"),
    scalacOptions ++= Seq(
     "-feature",
     "-deprecation",
@@ -34,7 +34,7 @@ lazy val commonSettings = Seq(
       , "co.fs2" %% "fs2-core" % "0.9.7"
       , "co.fs2" %% "fs2-io" % "0.9.7"
 
-      , "com.spinoco" %% "protocol-kafka" % "0.1.9-SNAPSHOT"
+      , "com.spinoco" %% "protocol-kafka" % "0.2.0"
 
    ),
    scmInfo := Some(ScmInfo(url("https://github.com/Spinoco/fs2-zk"), "git@github.com:Spinoco/fs2-kafka.git")),
@@ -43,7 +43,10 @@ lazy val commonSettings = Seq(
    initialCommands := s"""
     import fs2._
     import fs2.util._
+    import spinoco.fs2.kafka
     import spinoco.fs2.kafka._
+    import spinoco.protocol.kafka._
+    import scala.concurrent.duration._
   """
 ) ++ testSettings ++ scaladocSettings ++ publishingSettings ++ releaseSettings
 
@@ -80,10 +83,6 @@ lazy val publishingSettings = Seq(
   pomIncludeRepository := { _ => false },
   pomExtra := {
     <url>https://github.com/Spinoco/fs2-kafka</url>
-    <scm>
-      <url>git@github.com:Spinoco/fs2-kafka.git</url>
-      <connection>scm:git:git@github.com:Spinoco/fs2-kafka.git</connection>
-    </scm>
     <developers>
       {for ((username, name) <- contributors) yield
       <developer>

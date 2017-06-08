@@ -7,7 +7,6 @@ import fs2._
 import Stream._
 import fs2.util.Async.Change
 import fs2.util._
-import fs2.util.syntax._
 import scodec.bits.ByteVector
 import spinoco.protocol.kafka.Request.{ProduceRequest, RequiredAcks}
 import spinoco.protocol.kafka.codec.MessageCodec
@@ -46,12 +45,11 @@ object BrokerConnection {
     , readMaxChunkSize: Int = 256 * 1024      // 256 Kilobytes
   )(implicit AG:AsynchronousChannelGroup, F: Async[F]): Pipe[F, RequestMessage, ResponseMessage] = {
     (source: Stream[F,RequestMessage]) =>
-      tcp2.client(address).flatMap { socket =>
-        Stream.eval(F.delay(println(s"XXXG Connection connected: $address"))) >>
+      fs2.io.tcp.client(address).flatMap { socket =>
         eval(F.refOf(Map.empty[Int,RequestMessage])).flatMap { openRequests =>
-          val send = source.evalMap { x => socket.remoteAddress map { addr => println(s"XXXY >>>($addr) SENDING $x "); x }}.through(impl.sendMessages(
+          val send = source.through(impl.sendMessages(
             openRequests = openRequests
-            , sendOne = (x) => { println(s"SENDING TO SOCKET ($address): $x"); socket.write(x, writeTimeout).attempt.map(r => println(s"RESULT PUBLISH: $r")) }
+            , sendOne = (x) => socket.write(x, writeTimeout)
           ))
 
           val receive =
@@ -59,9 +57,8 @@ object BrokerConnection {
             .through(impl.receiveMessages(
               openRequests = openRequests
             ))
-            .map { x => println(s"XXXY <<< RECEIVED $x"); x}
 
-          (send.drain.onFinalize(socket.endOfInput) mergeHaltBoth receive) onError { err => println(s"XXXR FAILED CX: ${err.getMessage}"); Stream.fail(err) } onFinalize {socket.localAddress map ( ra => println(s"XXXR CONNECION $address ($ra) TERMINATED"))}
+          (send.drain.onFinalize(socket.endOfInput) mergeHaltBoth receive)
         }
       }
   }

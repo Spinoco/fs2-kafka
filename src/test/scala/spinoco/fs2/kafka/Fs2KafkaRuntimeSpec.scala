@@ -149,30 +149,27 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   }
 
   def awaitZKStarted(zkId: String @@ DockerId):Stream[Task,Nothing] = {
-    followImageLog(zkId).takeWhile(! _.contains("binding to port")).map(println).drain
+    followImageLog(zkId).takeWhile(! _.contains("binding to port")).drain ++
+    Stream.eval_(Task.delay(println(s"Zookeeper started at $zkId")))
   }
 
   def awaitKStarted(version: KafkaRuntimeRelease.Value, kafkaId: String @@ DockerId): Stream[Task, Nothing] = {
+    val output = Stream.eval_(Task.delay(println(s"Broker $version started at $kafkaId")))
     version match {
       case KafkaRuntimeRelease.V_8_2_0 =>
-        followImageLog(kafkaId).takeWhile(! _.contains("New leader is "))
-          .map(println).drain
+        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
 
       case KafkaRuntimeRelease.V_0_9_0_1 =>
-        followImageLog(kafkaId).takeWhile(! _.contains("New leader is "))
-          .map(println).drain
+        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
 
       case KafkaRuntimeRelease.V_0_10_0 =>
-        followImageLog(kafkaId).takeWhile(! _.contains("New leader is "))
-          .map(println).drain
+        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
 
       case KafkaRuntimeRelease.V_0_10_1 =>
-        followImageLog(kafkaId).takeWhile(! _.contains("New leader is "))
-          .map(println).drain
+        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
 
       case KafkaRuntimeRelease.V_0_10_2 =>
-        followImageLog(kafkaId).takeWhile(! _.contains("New leader is "))
-          .map(println).drain
+        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
     }
   }
 
@@ -254,7 +251,6 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   def killLeader(client: KafkaClient[Task], nodes: KafkaNodes, topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[Task, Nothing] = {
     client.leaders.discrete.take(1) map { _((topic, partition)) } flatMap { leader =>
-      println(s"XXXR KILLING BROKER: $leader")
       leader match {
         case `localBroker1_9092` => Stream.eval_(killImage(nodes.nodes(tag[Broker](1))))
         case `localBroker2_9192` => Stream.eval_(killImage(nodes.nodes(tag[Broker](2))))
