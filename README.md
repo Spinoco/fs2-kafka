@@ -1,15 +1,18 @@
 # fs2-kafka
 Kafka client implemented with [fs2](https://github.com/scalaz/scalaz-stream) library
+
+[![Build Status](https://travis-ci.org/Spinoco/fs2-kafka.svg?branch=master)](https://travis-ci.org/Spinoco/fs2-kafka)
+[![Gitter Chat](https://badges.gitter.im/functional-streams-for-scala/fs2.svg)](https://gitter.im/fs2-http/Lobby)
  
 ## Overview 
 
-fs2-kafka is simple client for consuming and publishing messages from / top Apache Kafka. It has minimalistic functionality and is fully implemented w/o any depenednecy on kafka driver itself. It is fully asynchronous, nonblocking and streaming. 
+fs2-kafka is simple client for consuming and publishing messages from / to Apache Kafka. It has minimalistic functionality and is fully implemented w/o any depenednecy on kafka native driver. It is fully asynchronous and non-blocking. 
 
 Thanks to fs2, it comes with full backpressure and streaming support out of the box, and plays well with other fs2 libraries such as [fs2-http](https://github.com/Spinoco/fs2-http). 
 
-The fs2-kafka was build with mninimal depenedencies (apart from fs2 only scodec is used). 
+The fs2-kafka was build with minimal depenedencies (apart from fs2 only scodec and shapeless is used). 
 
-fs2-kafka only support subset of features compare to original kafka client. There is for example no support for creating topic, or for Kafka Connect / Kafka Streams. Reasons for it is that we wanted client to be as simple as possible leaving all non-essesntial functionality to other solutions. 
+fs2-kafka only support subset of features compare to native kafka client. There is for example no support for creating/adminsitering topics and partitions, or for Kafka Connect / Kafka Streams. Reasons for it is that we wanted client to be as simple as possible leaving all non-essesntial functionality to other solutions. 
 
 
 
@@ -20,9 +23,9 @@ fs2-kafka only support subset of features compare to original kafka client. Ther
 - Query metadata from kafka cluster
 - Query offset range for topic / partition 
 
-For the compression of messages fs2-kafka supports GZIP and Snappy compression alghrothms. 
+For the compression of messages fs2-kafka supports GZIP and Snappy compression. 
 
-fs2-kafka supports versions since 0.8.2 until 0.10.2 of kafka cluster with protocols. The protocols are crosstested against the different versions of kafka (i.e. 0.10.2 is tested to wrok ok with 0.8.2, 0.9.x, 0.10, 0.10.1 and 0.10.2 protocols). 
+fs2-kafka supports versions since 0.8.2 until 0.10.2 of kafka cluster with protocols. The protocols are cross-tested against the different versions of kafka (i.e. 0.10.2 is tested to wrok ok with 0.8.2, 0.9.x, 0.10, 0.10.1 and 0.10.2 protocols). 
 
 ## SBT
 
@@ -72,6 +75,8 @@ kafka.client(
 ```
 
 Note that resulting type of this program is Stream[F, ???], that means stream needs to be run, and once it finishes the kafka client will terminate. 
+
+The `protocol` parameter allows to specify exact protocol to be used with ensemble, to make production migrations and upgrades easy. 
 
 
 ### Publishing to topics
