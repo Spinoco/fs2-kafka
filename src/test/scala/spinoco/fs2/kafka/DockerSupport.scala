@@ -98,7 +98,7 @@ object DockerSupport {
   }
 
 
-  def createNetwork(name: String, ipSubnet:String = "172.25.0.0/16 "): Task[Unit] = Task.delay {
+  def createNetwork(name: String, ipSubnet:String = "172.30.0.0/16 "): Task[Unit] = Task.delay {
     Process(s"""docker network create --subnet $ipSubnet $name""").!!
     ()
   }

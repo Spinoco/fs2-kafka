@@ -4,6 +4,13 @@ sudo: required
 services:
   - docker
 
+addons:
+  hosts:
+    - zookeeper
+    - broker1
+    - broker2
+    - broker3
+
 scala:
   - 2.11.8
   - 2.12.1

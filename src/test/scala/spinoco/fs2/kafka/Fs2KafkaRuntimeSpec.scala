@@ -72,6 +72,8 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
       _ <- installImageWhenNeeded(ZookeeperImage)
       runId <- runImage(ZookeeperImage,None)(
         "--restart=no"
+        , "--net=fs2-kafka-network"
+        , "--name=zookeeper"
         , s"-p $port:$port/tcp"
       )
     } yield runId
@@ -97,11 +99,13 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
       _ <- installImageWhenNeeded(image)
       params = Seq(
         "--restart=no"
+        , "--net=fs2-kafka-network"
+        , s"--name=broker$brokerId"
         , s"""--env KAFKA_PORT=$port"""
         , s"""--env KAFKA_BROKER_ID=$brokerId"""
-        , s"""--env KAFKA_ADVERTISED_HOST_NAME=${thisLocalHost.getHostAddress}"""
+        , s"""--env KAFKA_ADVERTISED_HOST_NAME=broker$brokerId"""
         , s"""--env KAFKA_ADVERTISED_PORT=$port"""
-        , s"""--env KAFKA_ZOOKEEPER_CONNECT=${thisLocalHost.getHostAddress}:$zkPort"""
+        , s"""--env KAFKA_ZOOKEEPER_CONNECT=zookeeper:$zkPort"""
         , s"-p $port:$port/tcp"
 
       )
@@ -128,12 +132,15 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   /** process emitting once docker id of zk and kafka in singleton (one node) **/
   def withKafkaSingleton(version: KafkaRuntimeRelease.Value):Stream[Task,(String @@ DockerId, String @@ DockerId)] = {
-    Stream.bracket(startZk())(
-      zkId => awaitZKStarted(zkId) ++ Stream.bracket(startK(version, 1))(
-        kafkaId => awaitKStarted(version, kafkaId) ++ Stream.emit(zkId -> kafkaId)
+    Stream.bracket(createNetwork("fs2-kafka-network")) (
+      _ => Stream.bracket(startZk())(
+        zkId => awaitZKStarted(zkId) ++ Stream.bracket(startK(version, 1))(
+          kafkaId => awaitKStarted(version, kafkaId) ++ Stream.emit(zkId -> kafkaId)
+          , stopImage
+        )
         , stopImage
       )
-      , stopImage
+    , _ => removeNetwork("fs2-kafka-network")
     )
   }
 
@@ -213,8 +220,8 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   /** start 3 node kafka cluster with zookeeper **/
   def withKafkaCluster(version: KafkaRuntimeRelease.Value): Stream[Task, KafkaNodes] = {
-
-    Stream.bracket(startZk())(
+    Stream.bracket(createNetwork("fs2-kafka-network")) (
+    _ => Stream.bracket(startZk())(
       zkId => {
         awaitZKStarted(zkId) ++ Stream.bracket(startK(version, 1))(
           broker1 => awaitKStarted(version, broker1) ++ time.sleep_(2.seconds) ++ Stream.bracket(startK(version, 2))(
@@ -229,7 +236,8 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
       }
       , stopImage
     )
-
+    , _ => removeNetwork("fs2-kafka-network")
+    )
   }
 
 
