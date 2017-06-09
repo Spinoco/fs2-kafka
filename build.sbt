@@ -22,6 +22,7 @@ lazy val commonSettings = Seq(
     "-Ywarn-value-discard",
     "-Ywarn-unused-import"
    ),
+   javaOptions += "-Djava.net.preferIPv4Stack=true",
    scalacOptions in (Compile, console) ~= {_.filterNot("-Ywarn-unused-import" == _)},
    scalacOptions in (Test, console) <<= (scalacOptions in (Compile, console)),
    libraryDependencies ++= Seq(
