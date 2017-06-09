@@ -26,7 +26,7 @@ class KafkaClusterPublish_1002_P_08_Spec extends KafkaClusterPublish(KafkaRuntim
 class KafkaClusterPublish_1002_P_09_Spec extends KafkaClusterPublish(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_9)
 class KafkaClusterPublish_1002_P_10_Spec extends KafkaClusterPublish(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10)
 class KafkaClusterPublish_1002_P_101_Spec extends KafkaClusterPublish(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10_1)
-
+class KafkaClusterPublish_1002_P_102_Spec extends KafkaClusterPublish(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10_2)
 
 /**
   * Created by pach on 06/06/17.
@@ -45,10 +45,11 @@ class KafkaClusterPublish (val runtime: KafkaRuntimeRelease.Value, val protocol:
         } map (Left(_))
       }
 
-      ((withKafkaCluster(KafkaRuntimeRelease.V_8_2_0) flatMap { nodes =>
-        Stream.eval(createKafkaTopic(nodes.broker1DockerId, testTopicA)) >>
-          time.sleep(1.second) >> {
-          KafkaClient(Set(localBroker1_9092), ProtocolVersion.Kafka_0_8, "test-client") flatMap { kc =>
+      ((withKafkaCluster(runtime) flatMap { nodes =>
+        time.sleep(3.second) >>
+        Stream.eval(createKafkaTopic(nodes.broker1DockerId, testTopicA)) >> {
+          KafkaClient(Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
+            awaitLeaderAvailable(kc, testTopicA, part0) >>
             publish(kc) ++
               (kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_)))
           } take 20

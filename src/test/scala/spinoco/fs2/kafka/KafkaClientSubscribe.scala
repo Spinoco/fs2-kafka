@@ -26,6 +26,7 @@ class KafkaClientSubscribe_1002_P_08_Spec extends KafkaClientSubscribe(KafkaRunt
 class KafkaClientSubscribe_1002_P_09_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_9)
 class KafkaClientSubscribe_1002_P_10_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10)
 class KafkaClientSubscribe_1002_P_101_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10_1)
+class KafkaClientSubscribe_1002_P_102_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10_2)
 
 /**
   * Created by pach on 31/05/17.

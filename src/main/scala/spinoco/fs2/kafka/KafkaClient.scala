@@ -16,11 +16,11 @@ import spinoco.fs2.kafka.KafkaClient.impl.PartitionPublishConnection
 import spinoco.fs2.kafka.failure._
 import spinoco.fs2.kafka.network.BrokerConnection
 import spinoco.fs2.kafka.state._
+import spinoco.protocol.kafka.Message.SingleMessage
 import spinoco.protocol.kafka.Request._
 import spinoco.protocol.kafka.{ProtocolVersion, Request, _}
 import spinoco.protocol.kafka.Response._
 
-import scala.annotation.tailrec
 import scala.concurrent.duration._
 /**
   * Client that binds to kafka broker. Usually application need only one client.
@@ -69,8 +69,8 @@ sealed trait KafkaClient[F[_]] {
     , minChunkByteSize: Int = 1
     , maxChunkByteSize: Int = 1024 * 1024
     , maxWaitTime: FiniteDuration = 1.minute
-    , leaderFailureTimeout: FiniteDuration = 5.seconds
-    , leaderFailureMaxAttempts: Int = 10
+    , leaderFailureTimeout: FiniteDuration = 3.seconds
+    , leaderFailureMaxAttempts: Int = 20
   ): Stream[F, TopicMessage]
 
 
@@ -259,6 +259,7 @@ object KafkaClient {
       , fetchConnection = impl.fetchBrokerConnection(brokerConnection, protocol, s"$clientName-fetch")
       , offsetConnection =  impl.offsetConnection(brokerConnection, protocol, s"$clientName-offset")
       , queryOffsetTimeout = queryOffsetTimeout
+      , protocol = protocol
     ))(
       use = { case (client, _) => Stream.emit(client) }
       , release = { case (_, shutdoen) => shutdoen }
@@ -293,6 +294,7 @@ object KafkaClient {
       , fetchConnection : BrokerAddress => Pipe[F, FetchRequest, (FetchRequest, FetchResponse)]
       , offsetConnection : BrokerAddress => Pipe[F, OffsetsRequest, OffsetResponse]
       , queryOffsetTimeout: FiniteDuration
+      , protocol: ProtocolVersion.Value
     )(implicit F: Async[F], L: Logger[F], S: Scheduler): F[(KafkaClient[F], F[Unit])] =  {
       async.signalOf(ClientState.initial) flatMap { stateSignal =>
       refreshFullMetadataFromBrokers(ensemble, fetchMetadata, stateSignal) >>
@@ -324,7 +326,7 @@ object KafkaClient {
              , leaderFailureTimeout: FiniteDuration
              , leaderFailureMaxAttempts: Int
            ): Stream[F, TopicMessage] =
-            subscribePartition(topicId, partition, offset, prefetch, minChunkByteSize, maxChunkByteSize, maxWaitTime, stateSignal, fetchConnection, refreshMeta, queryOffsetRange, leaderFailureTimeout, leaderFailureMaxAttempts)
+            subscribePartition(topicId, partition, offset, prefetch, minChunkByteSize, maxChunkByteSize, maxWaitTime, protocol, stateSignal, fetchConnection, refreshMeta, queryOffsetRange, leaderFailureTimeout, leaderFailureMaxAttempts)
 
           def offsetRangeFor(
             topicId: @@[String, TopicName]
@@ -542,6 +544,7 @@ object KafkaClient {
       , minChunkByteSize: Int
       , maxChunkByteSize: Int
       , maxWaitTime     : FiniteDuration
+      , protocol        : ProtocolVersion.Value
       , stateSignal     : mutable.Signal[F, ClientState]
       , brokerConnection: BrokerAddress => Pipe[F, FetchRequest, (FetchRequest, FetchResponse)]
       , refreshMeta     : (String @@ TopicName) => F[ClientState]
@@ -556,7 +559,7 @@ object KafkaClient {
       Stream.eval(F.refOf((firstOffset, 0))) flatMap { startFromRef =>
         def fetchFromBroker(broker: BrokerData): Stream[F, TopicMessage] = {
           def tryRecover(rsn: Throwable): Stream[F, TopicMessage] = {
-
+            Logger.error_(s"Leader $broker failed fetch $topicId[$partition]", rsn ) ++
             Stream.eval(startFromRef.get map { _._2 }) flatMap { failures =>
               if (failures >= leaderFailureMaxAttempts) Stream.fail(rsn)
               else {
@@ -572,16 +575,16 @@ object KafkaClient {
           }
 
           Stream.eval(async.unboundedQueue[F, FetchRequest]) flatMap { requestQueue =>
-            def requestNextChunk: F[Unit] = {
+            def requestNextChunk: F[Long @@ Offset] = {
               startFromRef.get map { _._1 } flatMap { startFrom =>
                 requestQueue.enqueue1(
                   FetchRequest(consumerBrokerId, maxWaitTime, minChunkByteSize, None, Vector((topicId, Vector((partition, startFrom, maxChunkByteSize)))))
-                )
+                ) as startFrom
               }
             }
 
-            Stream.eval(requestNextChunk) >>
-            ((requestQueue.dequeue through brokerConnection(broker.address)) flatMap { case (request, fetch) =>
+            (Stream.eval(requestNextChunk) flatMap { thisChunkStart =>
+            (requestQueue.dequeue through brokerConnection(broker.address)) flatMap { case (request, fetch) =>
               fetch.data.find(_._1 == topicId).flatMap(_._2.find(_.partitionId == partition)) match {
                 case None =>
                   Stream.fail(InvalidBrokerResponse(broker.address, "FetchResponse", request, Some(fetch)))
@@ -592,19 +595,22 @@ object KafkaClient {
                       Stream.fail(BrokerReportedFailure(broker.address, request, error))
 
                     case None =>
-                      val messages = messagesFromResult(result)
+                      val messages = messagesFromResult(protocol, result)
 
                       val updateLastKnown = messages.lastOption.map(m => m.offset) match {
                         case None => Stream.empty // No messages emitted, just go on
                         case Some(lastOffset) => Stream.eval_(startFromRef.modify { _ => (offset(lastOffset + 1), 0) })
                       }
+
+                      val  removeHead = messages.dropWhile(_.offset < thisChunkStart)
+
                       updateLastKnown ++ {
-                        if (prefetch) Stream.eval_(requestNextChunk) ++ Stream.emits(messages)
-                        else Stream.emits(messages) ++ Stream.eval_(requestNextChunk)
+                        if (prefetch) Stream.eval_(requestNextChunk) ++ Stream.emits(removeHead)
+                        else Stream.emits(removeHead) ++ Stream.eval_(requestNextChunk)
                       }
                   }
               }
-            }) ++ {
+            }}) ++ {
               // in normal situations this append shall never be consulted. But the broker may close connection from its side
               // and in that case we need to start querying from the last unfinished request or eventually continue from the
               // as such we fail there and OnError shall handle failure of early termination from broker
@@ -652,20 +658,32 @@ object KafkaClient {
       * @param result  Result from teh fetch
       * @return
       */
-    def messagesFromResult(result: Response.PartitionFetchResult): Vector[TopicMessage] = {
-      @tailrec
-      def go(remains: Vector[Message], acc: Vector[TopicMessage]): Vector[TopicMessage] = {
-        remains.headOption match {
-          case None => acc
-          case Some(message: Message.SingleMessage) =>
-            go(remains.tail, acc :+ TopicMessage(offset(message.offset), message.key, message.value, result.highWMOffset))
+    def messagesFromResult(protocol: ProtocolVersion.Value, result: Response.PartitionFetchResult): Vector[TopicMessage] = {
 
-          case Some(messages: Message.CompressedMessages) =>
-            go(messages.messages ++ remains.tail, acc)
+      // Extract compressed messages. No nested compressed messages support
+      def extractCompressed(m: Vector[Message], lastOffset: Long): Vector[SingleMessage] = {
+        protocol match {
+          case ProtocolVersion.Kafka_0_8 |
+               ProtocolVersion.Kafka_0_9 =>
+            m.collect { case sm: SingleMessage => sm }
+
+          case ProtocolVersion.Kafka_0_10 |
+               ProtocolVersion.Kafka_0_10_1 |
+               ProtocolVersion.Kafka_0_10_2 =>
+            val first = lastOffset - m.size + 1
+            m.collect { case sm: SingleMessage => sm.copy(offset = offset(sm.offset + first)) }
         }
+
       }
 
-      go(result.messages, Vector.empty)
+      def toTopicMessage(message: SingleMessage): TopicMessage =
+        TopicMessage(offset(message.offset), message.key, message.value, result.highWMOffset)
+
+      result.messages flatMap {
+        case message: Message.SingleMessage => Vector(toTopicMessage(message))
+        case messages: Message.CompressedMessages =>  extractCompressed(messages.messages, messages.offset) map toTopicMessage
+      }
+
     }
 
 

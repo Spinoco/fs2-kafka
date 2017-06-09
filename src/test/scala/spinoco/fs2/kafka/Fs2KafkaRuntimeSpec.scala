@@ -266,4 +266,13 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   }
 
 
+  def awaitLeaderAvailable(client: KafkaClient[Task], topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[Task, BrokerAddress] = {
+    client.leaders.discrete.collect(Function.unlift{ _.get((topic, partition)) }).take(1)
+  }
+
+  def awaitNewLeaderAvailable(client: KafkaClient[Task], topic: String @@ TopicName, partition: Int @@ PartitionId, previous: BrokerAddress): Stream[Task, BrokerAddress] = {
+    client.leaders.discrete.collect(Function.unlift { x => println(s"LEADERS: $x (prev: $previous)"); x.get((topic, partition)).filterNot(_ == previous) }).take(1) map { x => println(s"NEW LEADER AVAILABLE: $x"); x}
+  }
+
+
 }
