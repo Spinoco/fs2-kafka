@@ -124,7 +124,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
     Process("docker", Seq(
       "exec", "-i"
       , kafkaDockerId
-      , "bash", "-c", s"$$KAFKA_HOME/bin/kafka-topics.sh --zookeeper ${thisLocalHost.getHostAddress} --create --topic $name --partitions $partitionCount --replication-factor $replicas"
+      , "bash", "-c", s"$$KAFKA_HOME/bin/kafka-topics.sh --zookeeper zookeeper --create --topic $name --partitions $partitionCount --replication-factor $replicas"
     )).!!
     ()
   }
@@ -263,6 +263,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
         case `localBroker1_9092` => Stream.eval_(killImage(nodes.nodes(tag[Broker](1))))
         case `localBroker2_9192` => Stream.eval_(killImage(nodes.nodes(tag[Broker](2))))
         case `localBroker3_9292` => Stream.eval_(killImage(nodes.nodes(tag[Broker](3))))
+        case other => Stream.fail(new Throwable(s"Unexpected broker: $other"))
       }
     }
   }

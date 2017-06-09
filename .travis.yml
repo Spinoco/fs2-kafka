@@ -5,7 +5,7 @@ services:
   - docker
 
 addons:
-  hosts: 
+  hosts:
     - broker1
     - broker2
     - broker3
