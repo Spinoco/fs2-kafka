@@ -112,7 +112,7 @@ sealed trait KafkaClient[F[_]] {
   , message         : ByteVector
   , requireQuorum   : Boolean
   , serverAckTimeout: FiniteDuration
-  ): F[Long] = publishN(topicId, partition, requireQuorum, serverAckTimeout, None)(Seq((key, message)))
+  ): F[Long] = publishN(topicId, partition, requireQuorum, serverAckTimeout, None)(Chunk.singleton((key, message)))
 
   /**
     * Like `publish` except this won't wait for the confirmation that message was published (fire'n forget).
@@ -126,7 +126,7 @@ sealed trait KafkaClient[F[_]] {
     , partition: Int @@ PartitionId
     , key: ByteVector
     , message: ByteVector
-  ): F[Unit] = publishUnsafeN(topicId, partition, None)(Seq((key, message)))
+  ): F[Unit] = publishUnsafeN(topicId, partition, None)(Chunk.singleton((key, message)))
 
   /**
     * Publishes Chunk of messages to the ensemble. The messages are published as a whole batch, so when this
@@ -153,7 +153,7 @@ sealed trait KafkaClient[F[_]] {
     , requireQuorum: Boolean
     , serverAckTimeout: FiniteDuration
     , compress: Option[Compression.Value]
-  )(messages: Seq[(ByteVector, ByteVector)]): F[Long]
+  )(messages: Chunk[(ByteVector, ByteVector)]): F[Long]
 
   /**
     * Like `publishN` except this won't await for messages to be confirmed to be published successfully.
@@ -166,7 +166,7 @@ sealed trait KafkaClient[F[_]] {
     topic: String @@ TopicName
     , partition: Int @@ PartitionId
     , compress: Option[Compression.Value]
-  )(messages:Seq[(ByteVector, ByteVector)]): F[Unit]
+  )(messages: Chunk[(ByteVector, ByteVector)]): F[Unit]
 
   /**
     * Provides signal of topics and partitions available to this client.
@@ -301,7 +301,7 @@ object KafkaClient {
         val refreshMeta = refreshMetadata(fetchMetadata, stateSignal) _
         val queryOffsetRange = impl.queryOffsetRange(stateSignal, offsetConnection, queryOffsetTimeout) _
 
-        def preparePublishMessages(messages: Seq[(ByteVector, ByteVector)], compress: Option[Compression.Value]) = {
+        def preparePublishMessages(messages: Chunk[(ByteVector, ByteVector)], compress: Option[Compression.Value]) = {
           val singleMessages =  messages.map { case (k, v) => Message.SingleMessage(0, MessageVersion.V0, None, k , v) }
           compress match {
             case None => singleMessages.toVector
@@ -338,7 +338,7 @@ object KafkaClient {
             , requireQuorum: Boolean
             , serverAckTimeout: FiniteDuration
             , compress: Option[Compression.Value]
-          )(messages: Seq[(ByteVector, ByteVector)]): F[Long] = {
+          )(messages: Chunk[(ByteVector, ByteVector)]): F[Long] = {
 
             val toPublish = preparePublishMessages(messages, compress)
             val requiredAcks = if (requireQuorum) RequiredAcks.Quorum else RequiredAcks.LocalOnly
@@ -352,7 +352,7 @@ object KafkaClient {
             topicId: @@[String, TopicName]
             , partition: @@[Int, PartitionId]
             , compress: Option[Compression.Value]
-          )(messages: Seq[(ByteVector, ByteVector)]): F[Unit] = {
+          )(messages: Chunk[(ByteVector, ByteVector)]): F[Unit] = {
             val toPublish = preparePublishMessages(messages, compress)
             publisher.publish(topicId, partition, toPublish, NoResponseTimeout, RequiredAcks.NoResponse) as (())
           }
@@ -574,7 +574,7 @@ object KafkaClient {
             def requestNextChunk: F[Unit] = {
               startFromRef.get map { _._1 } flatMap { startFrom =>
                 requestQueue.enqueue1(
-                  FetchRequest(consumerBrokerId, maxWaitTime, minChunkByteSize, Vector((topicId, Vector((partition, startFrom, maxChunkByteSize)))))
+                  FetchRequest(consumerBrokerId, maxWaitTime, minChunkByteSize, None, Vector((topicId, Vector((partition, startFrom, maxChunkByteSize)))))
                 )
               }
             }

@@ -91,6 +91,7 @@ object BrokerConnectionApp extends App {
             replica = tag[Broker](-1)
             , maxWaitTime = 10.seconds
             , minBytes = 0
+            , maxBytes = None
             , topics = Vector((tag[TopicName]("test"), Vector(
               (tag[PartitionId](0), tag[Offset](0), 1024*1024)
             )))

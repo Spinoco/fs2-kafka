@@ -77,7 +77,7 @@ abstract class KafkaClientPublish(val runtime: KafkaRuntimeRelease.Value, val pr
     "publishN-unsafe" in {
       def publish(kc: KafkaClient[Task]) = {
         Stream.range(0, 10) evalMap { idx =>
-          kc.publishUnsafeN(testTopicA, part0, compress = None)(for { i <- 0 until 10} yield (ByteVector(i), ByteVector(i*idx)))
+          kc.publishUnsafeN(testTopicA, part0, compress = None)(Chunk.seq(for { i <- 0 until 10} yield (ByteVector(i), ByteVector(i*idx))))
         } drain
       }
 
@@ -97,7 +97,7 @@ abstract class KafkaClientPublish(val runtime: KafkaRuntimeRelease.Value, val pr
     "publishN-response" in {
       def publish(kc: KafkaClient[Task]) = {
         Stream.range(0, 10) evalMap { idx =>
-          kc.publishN(testTopicA, part0, requireQuorum = false, serverAckTimeout = 3.seconds, compress = None)(for { i <- 0 until 10} yield (ByteVector(i), ByteVector(idx)))
+          kc.publishN(testTopicA, part0, requireQuorum = false, serverAckTimeout = 3.seconds, compress = None)(Chunk.seq(for { i <- 0 until 10} yield (ByteVector(i), ByteVector(idx))))
         } map (Left(_))
       }
 
@@ -119,7 +119,7 @@ abstract class KafkaClientPublish(val runtime: KafkaRuntimeRelease.Value, val pr
     "publishN-unsafe-compressed-gzip" in {
       def publish(kc: KafkaClient[Task]) = {
         Stream.range(0, 10) evalMap { idx =>
-          kc.publishUnsafeN(testTopicA, part0, compress = Some(Compression.GZIP))(for {i <- 0 until 10} yield (ByteVector(i), ByteVector(i*idx)))
+          kc.publishUnsafeN(testTopicA, part0, compress = Some(Compression.GZIP))(Chunk.seq(for {i <- 0 until 10} yield (ByteVector(i), ByteVector(i*idx))))
         } drain
       }
 
@@ -139,7 +139,7 @@ abstract class KafkaClientPublish(val runtime: KafkaRuntimeRelease.Value, val pr
     "publishN-response-compressed-gzip" in {
       def publish(kc: KafkaClient[Task]) = {
         Stream.range(0, 10) evalMap { idx =>
-          kc.publishN(testTopicA, part0, requireQuorum = false, serverAckTimeout = 3.seconds, compress = Some(Compression.GZIP))(for { i <- 0 until 10} yield (ByteVector(i), ByteVector(idx)))
+          kc.publishN(testTopicA, part0, requireQuorum = false, serverAckTimeout = 3.seconds, compress = Some(Compression.GZIP))(Chunk.seq(for { i <- 0 until 10 } yield (ByteVector(i), ByteVector(idx))))
         } map (Left(_))
       }
 

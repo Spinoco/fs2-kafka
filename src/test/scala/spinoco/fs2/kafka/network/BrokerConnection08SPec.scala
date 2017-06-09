@@ -48,6 +48,7 @@ class BrokerConnection08SPec extends BrokerConnectionKafkaSpecBase {
               replica = tag[Broker](-1)
               , maxWaitTime = 1.second
               , minBytes = 1
+              , maxBytes = None
               , topics = Vector((testTopic1, Vector((part0, tag[Offset](0), 10240))))
             )
           )) ++ time.sleep_(1.minute))
