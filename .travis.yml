@@ -5,8 +5,7 @@ services:
   - docker
 
 addons:
-  hosts:
-    - zookeeper
+  hosts: 
     - broker1
     - broker2
     - broker3
