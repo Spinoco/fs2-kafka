@@ -26,7 +26,7 @@ lazy val commonSettings = Seq(
    scalacOptions in (Test, console) <<= (scalacOptions in (Compile, console)),
    libraryDependencies ++= Seq(
       "org.scalatest" %% "scalatest" % "3.0.0" % "test"
-      , "org.scalacheck" %% "scalacheck" % "1.13.1" % "test"
+      , "org.scalacheck" %% "scalacheck" % "1.13.4" % "test"
 
      // , "ch.qos.logback" % "logback-classic" % "1.1.7"
      // , "org.slf4j" % "slf4j-simple" % "1.6.1" % "test" // uncomment this for logs when testing
