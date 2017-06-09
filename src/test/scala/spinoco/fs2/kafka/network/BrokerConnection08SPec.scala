@@ -120,43 +120,7 @@ class BrokerConnection08SPec extends BrokerConnectionKafkaSpecBase {
         (testTopic1, Vector(PartitionOffsetResponse(partition(0), None, new Date(0), Vector(tag[Offset](0)))))
       )
     }
-//
-//
-//    "publish-perfromancee" in {
-//      val result =
-//        withKafka8Singleton(KafkaRuntimeRelease.V_8_2_0).flatMap { case (zkId, kafkaId) =>
-//          val createTopic =  Stream.eval_(createKafkaTopic(kafkaId,testTopic1))
-//
-//          def log(s:String):Stream[Task,Nothing] =
-//            Stream.eval_(Task.delay(println(s"XXXR ${new Date()}: $s")))
-//
-//          val publishOne = (log("start") ++ (Stream.iterate(0)(_ + 1).map { idx =>
-//            RequestMessage(
-//              version = ProtocolVersion.Kafka_0_8
-//              , correlationId = idx
-//              , clientId = "test-publisher"
-//              , request = ProduceRequest(
-//                requiredAcks = RequiredAcks.LocalOnly
-//                , timeout = 10.seconds
-//                , messages = Vector((testTopic1, Vector((part0, Vector(SingleMessage(0l, MessageVersion.V0, None, ByteVector(1, 2, 3), ByteVector(5, 6, 7, idx)))))))
-//              )
-//            )
-//          } ++ time.sleep_(1.minute))
-//            .through(BrokerConnection(new InetSocketAddress("127.0.0.1",9092)))
-//            .take(100000) ++ log("end")).map(Left(_))
-//
-//
-//
-//
-//          createTopic ++ publishOne
-//        }.runLog.unsafeRun()
-//
-//
-////      result shouldBe Vector(
-////        Left(ResponseMessage(1, ProduceResponse(Vector((testTopic1,Vector((part0,PartitionProduceResult(None,tag[Offset](0),None))))), throttleTime = None)))
-////        , Right(ResponseMessage(2,FetchResponse(Vector((testTopic1, Vector(PartitionFetchResult(part0, None, tag[Offset](1), Vector(SingleMessage(0,MessageVersion.V0, None, ByteVector(1,2,3), ByteVector(5,6,7))))))), throttleTime = None)))
-////      )
-//    }
+
 
 
   }

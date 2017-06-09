@@ -70,7 +70,7 @@ sealed trait KafkaClient[F[_]] {
     , maxChunkByteSize: Int = 1024 * 1024
     , maxWaitTime: FiniteDuration = 1.minute
     , leaderFailureTimeout: FiniteDuration = 5.seconds
-    , leaderFailureMaxAttempts: Int = 3
+    , leaderFailureMaxAttempts: Int = 10
   ): Stream[F, TopicMessage]
 
 
@@ -556,6 +556,7 @@ object KafkaClient {
       Stream.eval(F.refOf((firstOffset, 0))) flatMap { startFromRef =>
         def fetchFromBroker(broker: BrokerData): Stream[F, TopicMessage] = {
           def tryRecover(rsn: Throwable): Stream[F, TopicMessage] = {
+
             Stream.eval(startFromRef.get map { _._2 }) flatMap { failures =>
               if (failures >= leaderFailureMaxAttempts) Stream.fail(rsn)
               else {
@@ -745,7 +746,7 @@ object KafkaClient {
       */
     def publishLeaderConnection[F[_]](
       connection: BrokerAddress => Pipe[F, RequestMessage, ResponseMessage]
-      , stateSignal: Signal[F, ClientState]
+      , stateSignal: mutable.Signal[F, ClientState]
       , protocol:  ProtocolVersion.Value
       , clientId: String
       , failureDelay: FiniteDuration
@@ -798,15 +799,17 @@ object KafkaClient {
           (stateSignal.continuous.map( _.leaderFor(topicId, partition) ) flatMap {
 
             case None =>
-              // leader is not available just quickly terminate the requests, so they may be eventually rescheduled
+              L.error_(s"Leader unavailable for publishing to $topicId[$partition]")  ++
+                // leader is not available just quickly terminate the requests, so they may be eventually rescheduled
               // once leader will be available this will get interrupted and we start again
               (queue.dequeue.evalMap { case (_, cb) =>
                 cb(Left(LeaderNotAvailable(topicId, partition)))
-              } mergeDrainR (time.awakeEvery(refreshMetaDelay) evalMap { _ => refreshMeta(topicId) })  ) interruptWhen stateSignal.map(_.leaderFor(topicId, partition).nonEmpty)
+              } mergeDrainR (time.awakeEvery(refreshMetaDelay) evalMap { _ => refreshMeta(topicId) })) interruptWhen stateSignal.map(_.leaderFor(topicId, partition).nonEmpty)
 
 
             case Some(leader) =>
-              ((queue.dequeue.zipWithIndex evalMap (registerMessage _ tupled)) through connection(leader.address)) flatMap { response =>
+              L.info_(s"Leader available for publishing to $topicId[$partition] : $leader")  ++
+              (((queue.dequeue.zipWithIndex evalMap (registerMessage _ tupled)) through connection(leader.address)) flatMap { response =>
 
                 Stream.eval(ref.modify2 { m => (m - response.correlationId, m.get(response.correlationId)) }) flatMap { case (c, found) => found match {
                   case None => Stream.fail(UnexpectedResponse(leader.address, response))
@@ -825,19 +828,23 @@ object KafkaClient {
                     }
 
                 }}
-              } onError { failure =>
-                L.error(s"Unexpected failure while publishing to $topicId[$partition] at broker $leader", failure)
+              } append {
+                // this is consulted only when the connection with broker was terminated early (broker hung up.
+                // in that case we have to fail the stream so the OnError Handler will kick in
+                Stream.fail(new Throwable("Broker terminated connection"))
+
+              }) onError { failure =>
+                // when the current leader failed we will remve that leader from the leader of partition and that
+                // shall cause this to enter state w/o leader
+                // every `refreshMetaDelay` we the check if the leader is available.
+                L.error_(s"Unexpected failure while publishing to $topicId[$partition] at broker $leader", failure) ++
                 Stream.eval_ {
-                  // cancel all pending publishes with this error, wait safety interval and then try again
+                  // cancel all pending publishes with this error, sleep guard interval and re-query metadata
                   ref.modify(_ => Map.empty) map { _.previous.values.toSeq } flatMap { toCancel =>
                     val fail = Left(failure)
                     toCancel.traverse(_._2 (fail))
                   }
-                } ++ time.sleep_(failureDelay)
-              } onFinalize {
-                // this seems that leader has hung up or connection failed.
-                // We shall refresh metadata just to make sure leader is still the same and retry to establish connection again
-                refreshMeta(topicId) as (())
+                } ++ Stream.eval_(stateSignal.modify { _.invalidateLeader(topicId, partition, leader.brokerId) })
               }
           } interruptWhen termSignal ) onFinalize completeNotProcessed
 

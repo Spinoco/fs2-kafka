@@ -255,10 +255,11 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   def killLeader(client: KafkaClient[Task], nodes: KafkaNodes, topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[Task, Nothing] = {
     client.leaders.discrete.take(1) map { _((topic, partition)) } flatMap { leader =>
+      println(s"KILLING LEADER: $leader")
       leader match {
-        case `localBroker1_9092` => Stream.eval_(killImage(nodes.nodes(tag[Broker](1))))
-        case `localBroker2_9192` => Stream.eval_(killImage(nodes.nodes(tag[Broker](2))))
-        case `localBroker3_9292` => Stream.eval_(killImage(nodes.nodes(tag[Broker](3))))
+        case BrokerAddress(_, 9092) => Stream.eval_(killImage(nodes.nodes(tag[Broker](1))))
+        case BrokerAddress(_, 9192) => Stream.eval_(killImage(nodes.nodes(tag[Broker](2))))
+        case BrokerAddress(_, 9292) => Stream.eval_(killImage(nodes.nodes(tag[Broker](3))))
         case other => Stream.fail(new Throwable(s"Unexpected broker: $other"))
       }
     }

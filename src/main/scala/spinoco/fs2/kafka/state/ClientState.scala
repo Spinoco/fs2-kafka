@@ -26,6 +26,17 @@ case class ClientState(
   def leaderFor(topicName: String @@ TopicName, partition: Int @@ PartitionId): Option[BrokerData] =
     self.topics.get((topicName, partition)) flatMap { _.leader } flatMap { leaderId => brokers.get(leaderId) }
 
+  /** invalidates leader if that leader is still the active leader **/
+  def invalidateLeader(topicName: String @@ TopicName, partition: Int @@ PartitionId, leader: Int @@ Broker): ClientState = {
+    self.topics.get((topicName, partition)) match {
+      case None => self
+      case Some(tap) =>
+        if (! tap.leader.contains(leader)) self
+        else self.copy(topics = self.topics + ((topicName, partition) -> tap.copy(leader = None)))
+
+    }
+  }
+
 
 }
 

@@ -68,7 +68,6 @@ abstract class KafkaClusterClientSubscribe (val runtime: KafkaRuntimeRelease.Val
     }
 
 
-
     "recovers from leader-failure" in {
 
       ((withKafkaCluster(runtime) flatMap { nodes =>
@@ -80,7 +79,7 @@ abstract class KafkaClusterClientSubscribe (val runtime: KafkaRuntimeRelease.Val
           concurrent.join(Int.MaxValue)(Stream(
             kc.subscribe(testTopicA, part0, HeadOffset)
             , time.sleep_(3.seconds) ++ killLeader(kc, nodes, testTopicA, part0)
-            , time.sleep_(20.second) ++ Stream.eval_(publishNMessages(kc, 20, 30, quorum = true))
+            , time.sleep_(1 minute) ++ Stream.eval_(publishNMessages(kc, 20, 30, quorum = true)) // mostly kafka recovers in < 10s, but in certain scenarios this can take up to 1 minute before leader is elected
           ))
         } take 30
       } runLog ) unsafeRun).map { _.copy(tail = offset(30)) }  shouldBe generateTopicMessages(0, 30, 30)
