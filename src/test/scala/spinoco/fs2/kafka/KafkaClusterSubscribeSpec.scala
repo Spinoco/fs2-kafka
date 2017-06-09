@@ -20,7 +20,8 @@ class KafkaClusterSubscribeSpec extends Fs2KafkaRuntimeSpec {
 
   val version = s"$runtime[$protocol]"
 
-  s"$version cluster" - {
+
+  s"cluster" - {
 
     "subscribe-at-zero" in skipFor(
       KafkaRuntimeRelease.V_0_9_0_1 -> ProtocolVersion.Kafka_0_8

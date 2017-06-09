@@ -274,7 +274,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
 
   def awaitLeaderAvailable(client: KafkaClient[Task], topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[Task, BrokerAddress] = {
-    client.leaders.discrete.collect(Function.unlift{ _.get((topic, partition)) }).take(1)
+    client.leaders.discrete.collect(Function.unlift{ _.get((topic, partition)) }).take(1) mergeDrainR (time.awakeEvery(1.second) evalMap { _ => println(s"Refreshing topology: $topic $partition"); client.refreshTopology })
   }
 
   def awaitNewLeaderAvailable(client: KafkaClient[Task], topic: String @@ TopicName, partition: Int @@ PartitionId, previous: BrokerAddress): Stream[Task, BrokerAddress] = {
