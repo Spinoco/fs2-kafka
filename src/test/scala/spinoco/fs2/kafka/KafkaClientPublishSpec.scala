@@ -2,32 +2,14 @@ package spinoco.fs2.kafka
 
 import fs2._
 import scodec.bits.ByteVector
-import spinoco.protocol.kafka.{Compression, ProtocolVersion}
+import spinoco.protocol.kafka.Compression
 
 import scala.concurrent.duration._
 
-class KafkaClientPublish_0802_P_08_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_8_2_0, ProtocolVersion.Kafka_0_8)
-
-class KafkaClientPublish_0901_P_08_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_9_0_1, ProtocolVersion.Kafka_0_8)
-class KafkaClientPublish_0901_P_09_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_9_0_1, ProtocolVersion.Kafka_0_9)
-
-class KafkaClientPublish_1000_P_08_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_0, ProtocolVersion.Kafka_0_8)
-class KafkaClientPublish_1000_P_09_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_0, ProtocolVersion.Kafka_0_9)
-class KafkaClientPublish_1000_P_10_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_0, ProtocolVersion.Kafka_0_10)
-
-class KafkaClientPublish_1001_P_08_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_8)
-class KafkaClientPublish_1001_P_09_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_9)
-class KafkaClientPublish_1001_P_10_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_10)
-class KafkaClientPublish_1001_P_101_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_10_1)
-
-class KafkaClientPublish_1002_P_08_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_8)
-class KafkaClientPublish_1002_P_09_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_9)
-class KafkaClientPublish_1002_P_10_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10)
-class KafkaClientPublish_1002_P_101_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10_1)
-class KafkaClientPublish_1002_P_102_Spec extends KafkaClientPublish(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10_2)
 
 
-abstract class KafkaClientPublish(val runtime: KafkaRuntimeRelease.Value, val protocol: ProtocolVersion.Value) extends Fs2KafkaRuntimeSpec {
+
+class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
 
   val version = s"$runtime[$protocol]"
   

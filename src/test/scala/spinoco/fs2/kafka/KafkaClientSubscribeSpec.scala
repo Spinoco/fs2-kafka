@@ -2,36 +2,17 @@ package spinoco.fs2.kafka
 
 import fs2._
 import fs2.util.Async
-import fs2.util.Async
-import spinoco.protocol.kafka.ProtocolVersion
 
 import scala.concurrent.duration._
 
 
-class KafkaClientSubscribe_0802_P_08_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_8_2_0, ProtocolVersion.Kafka_0_8)
-
-class KafkaClientSubscribe_0901_P_08_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_9_0_1, ProtocolVersion.Kafka_0_8)
-class KafkaClientSubscribe_0901_P_09_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_9_0_1, ProtocolVersion.Kafka_0_9)
-
-class KafkaClientSubscribe_1000_P_08_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_10_0, ProtocolVersion.Kafka_0_8)
-class KafkaClientSubscribe_1000_P_09_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_10_0, ProtocolVersion.Kafka_0_9)
-class KafkaClientSubscribe_1000_P_10_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_10_0, ProtocolVersion.Kafka_0_10)
-
-class KafkaClientSubscribe_1001_P_08_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_8)
-class KafkaClientSubscribe_1001_P_09_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_9)
-class KafkaClientSubscribe_1001_P_10_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_10)
-class KafkaClientSubscribe_1001_P_101_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_10_1)
-
-class KafkaClientSubscribe_1002_P_08_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_8)
-class KafkaClientSubscribe_1002_P_09_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_9)
-class KafkaClientSubscribe_1002_P_10_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10)
-class KafkaClientSubscribe_1002_P_101_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10_1)
-class KafkaClientSubscribe_1002_P_102_Spec extends KafkaClientSubscribe(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10_2)
 
 /**
   * Created by pach on 31/05/17.
   */
-abstract class KafkaClientSubscribe(val runtime: KafkaRuntimeRelease.Value, val protocol: ProtocolVersion.Value) extends Fs2KafkaRuntimeSpec {
+class KafkaClientSubscribeSpec extends Fs2KafkaRuntimeSpec {
+
+
 
   val version = s"$runtime[$protocol]"
 

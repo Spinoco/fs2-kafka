@@ -6,37 +6,26 @@ import spinoco.protocol.kafka.ProtocolVersion
 import scala.concurrent.duration._
 
 
-class KafkaClusterSubscribe_0802_P_08_Spec extends KafkaClusterSubscribe(KafkaRuntimeRelease.V_8_2_0, ProtocolVersion.Kafka_0_8)
 
 // Kafka 9 has problem to reliably start cluster - need to find a way how to fix this.
 //class KafkaClusterSubscribe_0901_P_08_Spec extends KafkaClusterSubscribe(KafkaRuntimeRelease.V_0_9_0_1, ProtocolVersion.Kafka_0_8)
 //class KafkaClusterSubscribe_0901_P_09_Spec extends KafkaClusterSubscribe(KafkaRuntimeRelease.V_0_9_0_1, ProtocolVersion.Kafka_0_9)
 
-class KafkaClusterSubscribe_1000_P_08_Spec extends KafkaClusterSubscribe(KafkaRuntimeRelease.V_0_10_0, ProtocolVersion.Kafka_0_8)
-class KafkaClusterSubscribe_1000_P_09_Spec extends KafkaClusterSubscribe(KafkaRuntimeRelease.V_0_10_0, ProtocolVersion.Kafka_0_9)
-class KafkaClusterSubscribe_1000_P_10_Spec extends KafkaClusterSubscribe(KafkaRuntimeRelease.V_0_10_0, ProtocolVersion.Kafka_0_10)
 
-class KafkaClusterSubscribe_1001_P_08_Spec extends KafkaClusterSubscribe(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_8)
-class KafkaClusterSubscribe_1001_P_09_Spec extends KafkaClusterSubscribe(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_9)
-class KafkaClusterSubscribe_1001_P_10_Spec extends KafkaClusterSubscribe(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_10)
-class KafkaClusterSubscribe_1001_P_101_Spec extends KafkaClusterSubscribe(KafkaRuntimeRelease.V_0_10_1, ProtocolVersion.Kafka_0_10_1)
-
-class KafkaClusterSubscribe_1002_P_08_Spec extends KafkaClusterSubscribe(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_8)
-class KafkaClusterSubscribe_1002_P_09_Spec extends KafkaClusterSubscribe(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_9)
-class KafkaClusterSubscribe_1002_P_10_Spec extends KafkaClusterSubscribe(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10)
-class KafkaClusterSubscribe_1002_P_101_Spec extends KafkaClusterSubscribe(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10_1)
-class KafkaClusterSubscribe_1002_P_102_Spec extends KafkaClusterSubscribe(KafkaRuntimeRelease.V_0_10_2, ProtocolVersion.Kafka_0_10_2)
 
 /**
   * Created by pach on 06/06/17.
   */
-abstract class KafkaClusterSubscribe (val runtime: KafkaRuntimeRelease.Value, val protocol: ProtocolVersion.Value) extends Fs2KafkaRuntimeSpec {
+class KafkaClusterSubscribeSpec extends Fs2KafkaRuntimeSpec {
 
   val version = s"$runtime[$protocol]"
 
   s"$version cluster" - {
 
-    "subscribe-at-zero" in {
+    "subscribe-at-zero" in skipFor(
+      KafkaRuntimeRelease.V_0_9_0_1 -> ProtocolVersion.Kafka_0_8
+      , KafkaRuntimeRelease.V_0_9_0_1 -> ProtocolVersion.Kafka_0_9
+    ) {
       ((withKafkaCluster(runtime) flatMap { nodes =>
 
         Stream.eval(createKafkaTopic(nodes.broker1DockerId, testTopicA, replicas = 3)) >>
@@ -50,7 +39,10 @@ abstract class KafkaClusterSubscribe (val runtime: KafkaRuntimeRelease.Value, va
     }
 
 
-    "subscribe-at-tail" in {
+    "subscribe-at-tail" in skipFor(
+      KafkaRuntimeRelease.V_0_9_0_1 -> ProtocolVersion.Kafka_0_8
+      , KafkaRuntimeRelease.V_0_9_0_1 -> ProtocolVersion.Kafka_0_9
+    ) {
 
       ((withKafkaCluster(runtime) flatMap { nodes =>
 
@@ -69,7 +61,10 @@ abstract class KafkaClusterSubscribe (val runtime: KafkaRuntimeRelease.Value, va
     }
 
 
-    "recovers from leader-failure" in {
+    "recovers from leader-failure" in skipFor(
+      KafkaRuntimeRelease.V_0_9_0_1 -> ProtocolVersion.Kafka_0_8
+      , KafkaRuntimeRelease.V_0_9_0_1 -> ProtocolVersion.Kafka_0_9
+    ) {
 
       ((withKafkaCluster(runtime) flatMap { nodes =>
 

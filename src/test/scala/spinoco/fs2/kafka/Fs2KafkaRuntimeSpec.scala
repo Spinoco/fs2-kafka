@@ -8,7 +8,7 @@ import scodec.bits.ByteVector
 import shapeless.tag
 import shapeless.tag.@@
 import spinoco.fs2.kafka.state.BrokerAddress
-import spinoco.protocol.kafka.{Broker, PartitionId, TopicName}
+import spinoco.protocol.kafka.{Broker, PartitionId, ProtocolVersion, TopicName}
 
 import scala.sys.process.Process
 import scala.concurrent.duration._
@@ -41,6 +41,13 @@ object KafkaRuntimeRelease extends Enumeration {
 class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   import DockerSupport._
   import Fs2KafkaRuntimeSpec._
+
+  val runtime: KafkaRuntimeRelease.Value = KafkaRuntimeRelease.withName(System.getenv().get("KAFKA_TEST_RUNTIME"))
+  val protocol: ProtocolVersion.Value = ProtocolVersion.withName(System.getenv().get("KAFKA_TEST_PROTOCOL"))
+
+  def skipFor(versions: (KafkaRuntimeRelease.Value, ProtocolVersion.Value)*)(test: => Any): Any = {
+    if (! versions.contains((runtime, protocol))) test
+  }
 
   lazy val thisLocalHost: InetAddress = {
     val addr = InetAddress.getLocalHost
