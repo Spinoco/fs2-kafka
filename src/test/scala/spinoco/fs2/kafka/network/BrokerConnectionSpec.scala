@@ -127,8 +127,6 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
 
       val result = Stream(bytes.bytes.drop(4)).through(impl.decodeReceived(ref)).runLog.unsafeRun()
 
-      println(result)
-
       result shouldBe Vector(metaResponse)
       ref.get.unsafeRun() shouldBe Map()
     }

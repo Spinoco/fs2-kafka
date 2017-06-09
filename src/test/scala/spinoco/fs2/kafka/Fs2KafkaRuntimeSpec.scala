@@ -156,7 +156,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   }
 
   def awaitZKStarted(zkId: String @@ DockerId):Stream[Task,Nothing] = {
-    followImageLog(zkId).takeWhile(! _.contains("binding to port")).map(println).drain ++
+    followImageLog(zkId).takeWhile(! _.contains("binding to port")).drain ++
     Stream.eval_(Task.delay(println(s"Zookeeper started at $zkId")))
   }
 
@@ -164,43 +164,39 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
     val output = Stream.eval_(Task.delay(println(s"Broker $version started at $kafkaId")))
     version match {
       case KafkaRuntimeRelease.V_8_2_0 =>
-        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).map(println).drain ++ output
+        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
 
       case KafkaRuntimeRelease.V_0_9_0_1 =>
-        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).map(println).drain ++ output
+        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
 
       case KafkaRuntimeRelease.V_0_10_0 =>
-        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).map(println).drain ++ output
+        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
 
       case KafkaRuntimeRelease.V_0_10_1 =>
-        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).map(println).drain ++ output
+        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
 
       case KafkaRuntimeRelease.V_0_10_2 =>
-        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).map(println).drain ++ output
+        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
     }
   }
 
   def awaitKFollowerReady(version: KafkaRuntimeRelease.Value, kafkaId: String @@ DockerId, brokerId: Int): Stream[Task, Nothing] = {
+    val output = Stream.eval_(Task.delay(println(s"Broker $brokerId (follower) $version started at $kafkaId")))
     version match {
       case KafkaRuntimeRelease.V_8_2_0 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started"))
-          .map(println).drain
+        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
 
       case KafkaRuntimeRelease.V_0_9_0_1 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started"))
-          .map(println).drain
+        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
 
       case KafkaRuntimeRelease.V_0_10_0 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started"))
-          .map(println).drain
+        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
 
       case KafkaRuntimeRelease.V_0_10_1 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started"))
-          .map(println).drain
+        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
 
       case KafkaRuntimeRelease.V_0_10_2 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started"))
-          .map(println).drain
+        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
     }
   }
 

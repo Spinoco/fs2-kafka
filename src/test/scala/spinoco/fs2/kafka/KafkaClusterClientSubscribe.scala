@@ -80,7 +80,7 @@ abstract class KafkaClusterClientSubscribe (val runtime: KafkaRuntimeRelease.Val
           concurrent.join(Int.MaxValue)(Stream(
             kc.subscribe(testTopicA, part0, HeadOffset)
             , time.sleep_(3.seconds) ++ killLeader(kc, nodes, testTopicA, part0)
-            , time.sleep_(10.second) ++ Stream.eval_(publishNMessages(kc, 20, 30, quorum = true))
+            , time.sleep_(20.second) ++ Stream.eval_(publishNMessages(kc, 20, 30, quorum = true))
           ))
         } take 30
       } runLog ) unsafeRun).map { _.copy(tail = offset(30)) }  shouldBe generateTopicMessages(0, 30, 30)

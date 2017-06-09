@@ -18,7 +18,6 @@ object DockerSupport {
   /** Returns version of docker, if that docker is available. **/
   def dockerVersion:Task[Option[String]] = Task.delay {
     val output = Process("docker -v").!!
-    println(s"XXXXY ${output} = ${ExtractVersion.findAllMatchIn(output).toList}")
     for {
       m <- ExtractVersion.findAllMatchIn(output).toList.headOption
       version <- Option(m.group("version"))
@@ -49,7 +48,6 @@ object DockerSupport {
     */
   def runImage(imageName: String, name: Option[String])(props: String*):Task[String @@ DockerId] = Task.delay {
     val cmd = s"docker run -d ${ name.map(n => s"--name=$n").mkString } ${props.mkString(" ")} $imageName"
-    println(s"RUNNING: $cmd")
     tag[DockerId](Process(cmd).!!.trim)
   }
 
