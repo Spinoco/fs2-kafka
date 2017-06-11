@@ -7,18 +7,11 @@ import scala.concurrent.duration._
 
 
 
-// Kafka 9 has problem to reliably start cluster - need to find a way how to fix this.
-//class KafkaClusterSubscribe_0901_P_08_Spec extends KafkaClusterSubscribe(KafkaRuntimeRelease.V_0_9_0_1, ProtocolVersion.Kafka_0_8)
-//class KafkaClusterSubscribe_0901_P_09_Spec extends KafkaClusterSubscribe(KafkaRuntimeRelease.V_0_9_0_1, ProtocolVersion.Kafka_0_9)
-
-
-
 /**
   * Created by pach on 06/06/17.
   */
 class KafkaClusterSubscribeSpec extends Fs2KafkaRuntimeSpec {
 
-  val version = s"$runtime[$protocol]"
 
 
   s"cluster" - {

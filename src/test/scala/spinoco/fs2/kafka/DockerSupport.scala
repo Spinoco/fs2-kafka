@@ -3,6 +3,7 @@ package spinoco.fs2.kafka
 import fs2._
 import fs2.Task
 import fs2.util.Async
+import fs2.util.syntax._
 import shapeless.tag
 import shapeless.tag.@@
 
@@ -79,20 +80,31 @@ object DockerSupport {
     Process(s"docker ps -aq").!!.lines.filter(_.trim.nonEmpty).map(tag[DockerId](_)).toSet
   }
 
+
   /**
     * Issues a kill to image with given id
     */
-  def killImage(imageId:String @@ DockerId):Task[Unit] = Task.delay {
-    Process(s"docker kill $imageId").!!
-    ()
+  def killImage(imageId: String @@ DockerId):Task[Unit] = {
+    println(s"KILLING: $imageId")
+    Task.delay { Process(s"docker kill $imageId").!! } >>
+    runningImages.flatMap { allRun =>
+      println(s"Still RUN: $allRun")
+      if (allRun.exists(imageId.startsWith)) killImage(imageId)
+      else Task.now(())
+    }
   }
 
   /**
     * Cleans supplied image from the docker
     */
-  def cleanImage(imageId:String @@ DockerId):Task[Unit] = Task.delay {
-    Process(s"docker rm $imageId").!!
-    ()
+  def cleanImage(imageId: String @@ DockerId):Task[Unit] = {
+    println(s"CLEAN: $imageId")
+    Task.delay { Process(s"docker rm $imageId").!! } >>
+    availableImages.flatMap { allAvail =>
+      println(s"Still AV: $allAvail")
+      if (allAvail.exists(imageId.startsWith)) cleanImage(imageId)
+      else Task.now(())
+    }
   }
 
 
@@ -103,6 +115,7 @@ object DockerSupport {
 
 
   def removeNetwork(name: String): Task[Unit] = Task.delay {
+    println(s"REMOVING NETWORK $name")
     Process(s"""docker network rm $name""").!!
     ()
   }

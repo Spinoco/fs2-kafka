@@ -11,10 +11,8 @@ import scala.concurrent.duration._
 
 class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
 
-  val version = s"$runtime[$protocol]"
-  
 
-  s"$version: single-broker" - {
+  s"single-broker" - {
 
     "publish-unsafe" in {
 
@@ -24,15 +22,10 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } drain
       }
 
-      ((withKafkaSingleton(runtime) flatMap { case (zkDockerId, kafkaDockerId) =>
-        Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
-          time.sleep(1.second) >> {
-          KafkaClient(Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
-            publish(kc) ++
-            time.sleep(2.second) >> // wait for message to be accepted
-            kc.subscribe(testTopicA, part0, offset(0l)).take(10)
-          }
-        }
+      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+        publish(kc) ++
+        time.sleep(2.second) >> // wait for message to be accepted
+        kc.subscribe(testTopicA, part0, offset(0l)).take(10)
       } runLog  ) unsafeRun).size shouldBe 10
 
     }
@@ -44,15 +37,10 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } map (Left(_))
       }
 
-      ((withKafkaSingleton(runtime) flatMap { case (zkDockerId, kafkaDockerId) =>
-        Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
-          time.sleep(1.second) >> {
-          KafkaClient(Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
-            publish(kc) ++
-            (kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_)))
-          } take 20
-        }
-      } runLog  ) unsafeRun) shouldBe
+      (((withKafkaClient(runtime, protocol) flatMap { kc =>
+          publish(kc) ++
+          (kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_)))
+      } take 20)  runLog) unsafeRun) shouldBe
         (for { idx <- 0 until 10} yield Left(offset(idx))).toVector ++
         (for { idx <- 0 until 10} yield Right(TopicMessage(offset(idx), ByteVector(1), ByteVector(idx), offset(10)))).toVector
     }
@@ -65,15 +53,10 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } drain
       }
 
-      ((withKafkaSingleton(runtime) flatMap { case (zkDockerId, kafkaDockerId) =>
-        Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
-          time.sleep(1.second) >> {
-          KafkaClient(Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
-            publish(kc) ++
-            time.sleep(3.second) >> // wait for message to be accepted
-            kc.subscribe(testTopicA, part0, offset(0l)).take(100)
-          }
-        }
+      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+        publish(kc) ++
+        time.sleep(3.second) >> // wait for message to be accepted
+        kc.subscribe(testTopicA, part0, offset(0l)).take(100)
       } runLog  ) unsafeRun).size shouldBe 100
 
     }
@@ -86,15 +69,10 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } map (Left(_))
       }
 
-      ((withKafkaSingleton(runtime) flatMap { case (zkDockerId, kafkaDockerId) =>
-        Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
-          time.sleep(1.second) >> {
-          KafkaClient(Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
-            publish(kc) ++
-              (kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_)))
-          } take 110
-        }
-      } runLog ) unsafeRun) shouldBe
+      (((withKafkaClient(runtime, protocol) flatMap { kc =>
+        publish(kc) ++
+        (kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_)))
+      } take 110 ) runLog ) unsafeRun) shouldBe
         (for { idx <- 0 until 10} yield Left(offset(idx*10))).toVector ++
         (for { idx <- 0 until 100} yield Right(TopicMessage(offset(idx), ByteVector(idx % 10), ByteVector(idx / 10), offset(100)))).toVector
 
@@ -108,15 +86,10 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } drain
       }
 
-      ((withKafkaSingleton(runtime) flatMap { case (zkDockerId, kafkaDockerId) =>
-        Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
-          time.sleep(1.second) >> {
-          KafkaClient(Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
-            publish(kc) ++
-              time.sleep(3.second) >> // wait for message to be accepted
-              kc.subscribe(testTopicA, part0, offset(0l)).take(100)
-          }
-        }
+      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+        publish(kc) ++
+        time.sleep(3.second) >> // wait for message to be accepted
+        kc.subscribe(testTopicA, part0, offset(0l)).take(100)
       } runLog  ) unsafeRun).size shouldBe 100
 
     }
@@ -126,17 +99,13 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
       def publish(kc: KafkaClient[Task]) = {
         Stream.range(0, 10) evalMap { idx =>
           kc.publishN(testTopicA, part0, requireQuorum = false, serverAckTimeout = 3.seconds, compress = Some(Compression.GZIP))(Chunk.seq(for { i <- 0 until 10 } yield (ByteVector(i), ByteVector(idx))))
-        } map (Left(_))
+        } map {x => println(s"SENT: $x"); x} map (Left(_))
       }
 
-      ((withKafkaSingleton(runtime) flatMap { case (zkDockerId, kafkaDockerId) =>
-        Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
-          time.sleep(1.second) >> {
-          KafkaClient(Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
-            publish(kc) ++
-              (kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_)))
-          } take 110
-        }
+      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+        println("ABOUT TO PUBLISH XXX")
+        publish(kc) ++
+        ((kc.subscribe(testTopicA, part0, offset(0l)) map { x => println(s"RECVD $x"); x } map (Right(_))) take 100) onFinalize { Task.delay { println("SUB DONE")} }
       } runLog ) unsafeRun) shouldBe
         (for { idx <- 0 until 10} yield Left(offset(idx*10))).toVector ++
           (for { idx <- 0 until 100} yield Right(TopicMessage(offset(idx), ByteVector(idx % 10), ByteVector(idx / 10), offset(100)))).toVector
@@ -151,14 +120,9 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } map (Left(_))
       }
 
-      ((withKafkaSingleton(runtime) flatMap { case (zkDockerId, kafkaDockerId) =>
-        Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
-          time.sleep(1.second) >> {
-          KafkaClient(Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
-            publish(kc) ++
-              (kc.subscribe(testTopicA, part0, offset(5l)) map (Right(_)))
-          } take 105
-        }
+      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+        publish(kc) ++
+        ((kc.subscribe(testTopicA, part0, offset(5l)) map (Right(_)))  take 95)
       } runLog ) unsafeRun) shouldBe
         ((for { idx <- 0 until 10} yield Left(offset(idx*10))).toVector ++
           (for { idx <- 0 until 100} yield Right(TopicMessage(offset(idx), ByteVector(idx % 10), ByteVector(idx / 10), offset(100)))).drop(5).toVector)
@@ -173,15 +137,10 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } drain
       }
 
-      ((withKafkaSingleton(runtime) flatMap { case (zkDockerId, kafkaDockerId) =>
-        Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
-          time.sleep(1.second) >> {
-          KafkaClient(Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
-            publish(kc) ++
-              time.sleep(3.second) >> // wait for message to be accepted
-              kc.subscribe(testTopicA, part0, offset(0l)).take(100)
-          }
-        }
+      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+        publish(kc) ++
+        time.sleep(3.second) >> // wait for message to be accepted
+        kc.subscribe(testTopicA, part0, offset(0l)).take(100)
       } runLog  ) unsafeRun).size shouldBe 100
 
     }
@@ -194,21 +153,14 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } map (Left(_))
       }
 
-      ((withKafkaSingleton(runtime) flatMap { case (zkDockerId, kafkaDockerId) =>
-        Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
-          time.sleep(1.second) >> {
-          KafkaClient(Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
-            publish(kc) ++
-              (kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_)))
-          } take 110
-        }
+      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+        publish(kc) ++
+        ((kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_))) take 100)
       } runLog ) unsafeRun) shouldBe
         (for { idx <- 0 until 10} yield Left(offset(idx*10))).toVector ++
           (for { idx <- 0 until 100} yield Right(TopicMessage(offset(idx), ByteVector(idx % 10), ByteVector(idx / 10), offset(100)))).toVector
 
     }
-
-
 
   }
 

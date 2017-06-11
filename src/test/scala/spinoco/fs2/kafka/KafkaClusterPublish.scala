@@ -12,9 +12,9 @@ import scala.concurrent.duration._
   */
 class KafkaClusterPublish extends Fs2KafkaRuntimeSpec {
 
-  val version = s"$runtime[$protocol]"
+
  
-  s"$version: cluster" - {
+  s"cluster" - {
 
 
     "publish-response" in skipFor(

@@ -448,8 +448,12 @@ object KafkaClient {
           case None => F.fail(NoBrokerAvailable)
           case Some(broker) =>
             brokerConnection(broker.address, MetadataRequest(Vector(topicId))).attempt flatMap {
-              case Right(resp) => stateSignal.modify(updateClientState(resp)).map(_.now)
-              case Left(err) => go(remains.tail)
+              case Right(resp) =>
+                println(s"META FROM $broker : $resp")
+                stateSignal.modify(updateClientState(resp)).map(_.now)
+              case Left(err) =>
+                println(s"NO META FROM: $broker: $err")
+                go(remains.tail)
 
             }
         }
@@ -802,6 +806,7 @@ object KafkaClient {
           }
         }
 
+        val leaderSignal = stateSignal.map( _.leaderFor(topicId, partition) )
 
         // This runs the connection with partition leader.
         // this await leader for given topic/partition, then establishes connection to that partition // leader
@@ -814,15 +819,15 @@ object KafkaClient {
         //
         //
         val runner =
-          (stateSignal.continuous.map( _.leaderFor(topicId, partition) ) flatMap {
+          (leaderSignal.continuous map { x => println(s"LEADER PUB: $topicId[$partition]: $x"); x } flatMap {
 
             case None =>
               L.error_(s"Leader unavailable for publishing to $topicId[$partition]")  ++
-                // leader is not available just quickly terminate the requests, so they may be eventually rescheduled
+              // leader is not available just quickly terminate the requests, so they may be eventually rescheduled
               // once leader will be available this will get interrupted and we start again
               (queue.dequeue.evalMap { case (_, cb) =>
                 cb(Left(LeaderNotAvailable(topicId, partition)))
-              } mergeDrainR (time.awakeEvery(refreshMetaDelay) evalMap { _ => refreshMeta(topicId) })) interruptWhen stateSignal.map(_.leaderFor(topicId, partition).nonEmpty)
+              } mergeDrainR (time.awakeEvery(refreshMetaDelay) evalMap { _ => refreshMeta(topicId) })) interruptWhen leaderSignal.map { _.nonEmpty }
 
 
             case Some(leader) =>
@@ -855,7 +860,7 @@ object KafkaClient {
                 // when the current leader failed we will remve that leader from the leader of partition and that
                 // shall cause this to enter state w/o leader
                 // every `refreshMetaDelay` we the check if the leader is available.
-                L.error_(s"Unexpected failure while publishing to $topicId[$partition] at broker $leader", failure) ++
+                L.error_(s"Failure of publishing connection to $topicId[$partition] at broker $leader", failure) ++
                 Stream.eval_ {
                   // cancel all pending publishes with this error, sleep guard interval and re-query metadata
                   ref.modify(_ => Map.empty) map { _.previous.values.toSeq } flatMap { toCancel =>
