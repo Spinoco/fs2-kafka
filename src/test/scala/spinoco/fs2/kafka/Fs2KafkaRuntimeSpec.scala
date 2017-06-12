@@ -65,7 +65,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   implicit lazy val logger: Logger[Task] = new Logger[Task] {
     def log(level: Logger.Level.Value, msg: => String, throwable: Throwable): Task[Unit] =
-      Task.delay { println(s"$level: $msg"); if (throwable != null) throwable.printStackTrace() }
+      Task.delay { println(s"LOGGER: $level: $msg"); if (throwable != null) throwable.printStackTrace() }
   }
 
 

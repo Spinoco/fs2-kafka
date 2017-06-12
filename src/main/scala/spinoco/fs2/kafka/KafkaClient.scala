@@ -889,11 +889,11 @@ object KafkaClient {
         new PartitionPublishConnection[F] {
 
           def run: F[Unit] =
-            L.info(s"Starting publish connection for $topicId[$partition]") >>
+            L.warn(s"Starting publish connection for $topicId[$partition]") >>
             (runner(None) interruptWhen termSignal).run.attempt flatMap { r => completeNotProcessed(r.left.toOption.getOrElse(ClientTerminated)) }
 
           def shutdown: F[Unit] =
-            L.info(s"Shutting-down publish connection for $topicId[$partition]") >> termSignal.set(true)
+            L.warn(s"Shutting-down publish connection for $topicId[$partition]") >> termSignal.set(true)
 
           def publish(messages: Vector[Message], timeout: FiniteDuration, acks: RequiredAcks.Value): F[Option[(Long @@ Offset, Option[Date])]] = {
             println(s"ABOUT TO PUBLISH: $topicId[$partition] : $messages")
@@ -955,9 +955,11 @@ object KafkaClient {
                   }
                 } flatMap { c =>
                   if (c.modified) {
+                    F.delay(println(s">>>> PPC ADDED $topic[$partition]: $c")) >>
                     // we have won the race, so we shall start the publisher and then publish
                     F.start(ppc.run) >> publish(topic, partition, data, timeout, acks)
                   } else  {
+                    F.delay(println(s">>> PPC REMOVED $topic[$partition]: $c")) >>
                     // someone else won the ppc, we shall publish to new publisher.
                     publish(topic, partition, data, timeout, acks)
                   }
