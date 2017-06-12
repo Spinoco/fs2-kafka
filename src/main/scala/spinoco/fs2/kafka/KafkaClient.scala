@@ -896,6 +896,7 @@ object KafkaClient {
             L.info(s"Shutting-down publish connection for $topicId[$partition]") >> termSignal.set(true)
 
           def publish(messages: Vector[Message], timeout: FiniteDuration, acks: RequiredAcks.Value): F[Option[(Long @@ Offset, Option[Date])]] = {
+            println(s"ABOUT TO PUBLISH: $topicId[$partition] : $messages")
             F.ref[Attempt[Response]] flatMap { cbRef =>
               val request = ProduceRequest(
                 requiredAcks = acks
@@ -904,8 +905,8 @@ object KafkaClient {
               )
 
               queue.enqueue1((request, cbRef.setPure)) >> cbRef.get flatMap {
-                case Left(err) => F.fail(err)
-                case Right(r) => F.pure(r)
+                case Left(err) => println(s"PUB FAILED OF $topicId[$partition] : $messages");  F.fail(err)
+                case Right(r) => println(s"pub ok of $topicId[$partition] : $messages");  F.pure(r)
               }
 
             }
