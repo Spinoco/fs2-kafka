@@ -28,7 +28,7 @@ class KafkaClusterSubscribeSpec extends Fs2KafkaRuntimeSpec {
           Stream.eval(publishNMessages(kc, 0, 20, quorum = true)) >>
             kc.subscribe(testTopicA, part0, HeadOffset)
         } take 10
-      } runLog ) unsafeRun) shouldBe generateTopicMessages(0, 10, 20)
+      } runLog ) unsafeTimed 180.seconds unsafeRun) shouldBe generateTopicMessages(0, 10, 20)
 
     }
 
@@ -49,7 +49,7 @@ class KafkaClusterSubscribeSpec extends Fs2KafkaRuntimeSpec {
               , time.sleep_(3.second) ++ Stream.eval_(publishNMessages(kc, 20, 30, quorum = true))
             ))
         } take 10
-      } runLog ) unsafeRun).map { _.copy(tail = offset(30)) }  shouldBe generateTopicMessages(20, 30, 30)
+      } runLog ) unsafeTimed 180.seconds unsafeRun).map { _.copy(tail = offset(30)) }  shouldBe generateTopicMessages(20, 30, 30)
 
 
     }
@@ -72,7 +72,7 @@ class KafkaClusterSubscribeSpec extends Fs2KafkaRuntimeSpec {
             , time.sleep_(10.seconds) ++ awaitNewLeaderAvailable(kc, testTopicA, part0, leader).drain ++ Stream.eval_(publishNMessages(kc, 20, 30, quorum = true))
           ))
         }} take 30
-      } runLog ) unsafeRun).map { _.copy(tail = offset(30)) } shouldBe generateTopicMessages(0, 30, 30)
+      } runLog ) unsafeTimed 180.seconds unsafeRun).map { _.copy(tail = offset(30)) } shouldBe generateTopicMessages(0, 30, 30)
 
 
     }

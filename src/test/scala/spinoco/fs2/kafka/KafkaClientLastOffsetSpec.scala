@@ -17,7 +17,7 @@ class KafkaClientLastOffsetSpec extends Fs2KafkaRuntimeSpec {
     "queries when topic is empty"  in {
       ((withKafkaClient(runtime, protocol) flatMap { kc =>
           Stream.eval(kc.offsetRangeFor(testTopicA, tag[PartitionId](0)))
-      }  runLog ) unsafeRun) shouldBe Vector((offset(0), offset(0)))
+      }  runLog ) unsafeTimed 30.seconds unsafeRun) shouldBe Vector((offset(0), offset(0)))
     }
 
 
@@ -25,7 +25,7 @@ class KafkaClientLastOffsetSpec extends Fs2KafkaRuntimeSpec {
       ((withKafkaClient(runtime, protocol) flatMap { kc =>
           Stream.eval(kc.publish1(testTopicA, part0, ByteVector(1, 2, 3), ByteVector(5, 6, 7), false, 10.seconds)) >>
           Stream.eval(kc.offsetRangeFor(testTopicA, tag[PartitionId](0)))
-      } runLog ) unsafeRun) shouldBe Vector((offset(0), offset(1)))
+      } runLog ) unsafeTimed 30.seconds unsafeRun) shouldBe Vector((offset(0), offset(1)))
     }
 
 

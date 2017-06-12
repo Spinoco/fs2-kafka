@@ -36,7 +36,7 @@ class KafkaClusterPublish extends Fs2KafkaRuntimeSpec {
               (kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_)))
           } take 20
         }
-      } runLog  ) unsafeRun) shouldBe
+      } runLog  ) unsafeTimed 100.seconds unsafeRun) shouldBe
         (for { idx <- 0 until 10} yield Left(offset(idx))).toVector ++
           (for { idx <- 0 until 10} yield Right(TopicMessage(offset(idx), ByteVector(1), ByteVector(idx), offset(10)))).toVector
     }
