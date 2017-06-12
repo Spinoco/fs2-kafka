@@ -262,8 +262,8 @@ object KafkaClient {
       , queryOffsetTimeout = queryOffsetTimeout
       , protocol = protocol
     ))(
-      use = { case (client, _) => Stream.emit(client) }
-      , release = { case (_, shutdoen) => shutdoen }
+      use = { case (client, _) => Stream.emit(client) ++ time.sleep_(1 hour) }
+      , release = { case (_, shutdown) => shutdown }
     )
   }
 
