@@ -954,10 +954,12 @@ object KafkaClient {
                     else s.copy(connections = s.connections + ((topic, partition) -> ppc))
                   }
                 } flatMap { c =>
-                  if (c.modified) {
+                  if (c.previous.shutdown) {
+                    F.fail(ClientTerminated)
+                  } else if (c.modified) {
                     F.delay(println(s">>>> PPC ADDED $topic[$partition]: $c")) >>
-                    // we have won the race, so we shall start the publisher and then publish
-                    F.start(ppc.run) >> publish(topic, partition, data, timeout, acks)
+                      // we have won the race, so we shall start the publisher and then publish
+                      F.start(ppc.run) >> publish(topic, partition, data, timeout, acks)
                   } else  {
                     F.delay(println(s">>> PPC REMOVED $topic[$partition]: $c")) >>
                     // someone else won the ppc, we shall publish to new publisher.
