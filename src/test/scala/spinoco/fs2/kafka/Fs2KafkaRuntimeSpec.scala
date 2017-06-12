@@ -163,7 +163,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
       time.sleep(1.second) >>
       Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
       KafkaClient(Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
-        awaitLeaderAvailable(kc, testTopicA, part0).drain ++ f(kc)
+        (awaitLeaderAvailable(kc, testTopicA, part0) onError { err => println(s"FAILED TO WAIT TILL LEADER : $err"); Stream.fail(err)  } ).drain ++ f(kc)
       }
     }
   }
@@ -292,8 +292,8 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   def awaitLeaderAvailable(client: KafkaClient[Task], topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[Task, BrokerAddress] = {
     val leaderReady =  client.leaders.map { _.get((topic, partition)) }
-    leaderReady.discrete .map { x => println(s"LEADER for test: $x") ; x }.unNone.map { x => println(s"TOPOLOGY: $x"); x}.take(1) mergeDrainR
-    ((time.awakeEvery(1.second) evalMap { _ => println(s"Refreshing topology (SPEC): $topic $partition"); client.refreshTopology }) interruptWhen leaderReady.map { _.nonEmpty })
+    leaderReady.discrete .map { x => println(s"LEADER for test: $x") ; x }.unNone.map { x => println(s"TOPOLOGY: $x"); x}.take(1) mergeHaltBoth
+      ((time.awakeEvery(1.second) evalMap { _ => println(s"Refreshing topology (SPEC): $topic $partition"); client.refreshTopology }) drain)
   }
 
   def awaitNewLeaderAvailable(client: KafkaClient[Task], topic: String @@ TopicName, partition: Int @@ PartitionId, previous: BrokerAddress): Stream[Task, BrokerAddress] = {
