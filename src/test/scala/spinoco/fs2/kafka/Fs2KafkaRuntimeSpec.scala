@@ -77,6 +77,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
     for {
       _ <- dockerVersion.flatMap(_.fold[Task[String]](Task.fail(new Throwable("Docker is not available")))(Task.now))
       _ <- installImageWhenNeeded(ZookeeperImage)
+      - <- Task.delay { println(s"STARTING ZK @$port") }
       runId <- runImage(ZookeeperImage,None)(
         "--restart=no"
         , "--net=fs2-kafka-network"
@@ -116,6 +117,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
         , s"-p $port:$port/tcp"
 
       )
+      - <- Task.delay { println(s"STARTING BROKER[$brokerId] @$port") }
       runId <- runImage(image,None)(params :_*)
     } yield runId
   }

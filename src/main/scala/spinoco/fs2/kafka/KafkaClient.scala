@@ -422,7 +422,7 @@ object KafkaClient {
       } toMap
 
       ClientState(
-        brokers = s.brokers ++ newBrokers 
+        brokers = s.brokers ++ newBrokers
         , topics = s.topics ++ newTopics
       )
     }
