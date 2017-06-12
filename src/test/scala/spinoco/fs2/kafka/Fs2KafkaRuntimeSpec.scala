@@ -236,7 +236,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   /** start 3 node kafka cluster with zookeeper **/
   def withKafkaCluster(version: KafkaRuntimeRelease.Value): Stream[Task, KafkaNodes] = {
-    Stream.eval(createNetwork("fs2-kafka-network"))
+    Stream.eval_(createNetwork("fs2-kafka-network")) ++
     Stream.bracket(startZk())(
       zkId => {
         awaitZKStarted(zkId) ++ Stream.bracket(startK(version, 1))(
