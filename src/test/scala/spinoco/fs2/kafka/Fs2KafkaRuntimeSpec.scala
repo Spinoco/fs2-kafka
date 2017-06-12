@@ -143,13 +143,12 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
 
   /** process emitting once docker id of zk and kafka in singleton (one node) **/
-  def withKafkaSingleton(version: KafkaRuntimeRelease.Value):Stream[Task,(String @@ DockerId, String @@ DockerId)] = {
-
+  def withKafkaSingleton[A](version: KafkaRuntimeRelease.Value)(f: (String @@ DockerId, String @@ DockerId) => Stream[Task, A]):Stream[Task,A] = {
     Stream.eval(createNetwork("fs2-kafka-network")) >>
     Stream.eval(startZk()).flatMap { zkId =>
     awaitZKStarted(zkId) ++ time.sleep_(2.seconds) ++
     Stream.eval(startK(version, 1)).flatMap { kafkaId =>
-      (awaitKStarted(version, kafkaId) ++ Stream.emit(zkId -> kafkaId))
+      (awaitKStarted(version, kafkaId) ++ f(zkId, kafkaId))
       .onFinalize {
         stopImage(kafkaId) >>
         stopImage(zkId) >>
@@ -159,12 +158,12 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   }
 
-  def withKafkaClient(version: KafkaRuntimeRelease.Value, protocol: ProtocolVersion.Value): Stream[Task, KafkaClient[Task]] = {
-    withKafkaSingleton(version) flatMap { case images@(_, kafkaDockerId) =>
+  def withKafkaClient[A](version: KafkaRuntimeRelease.Value, protocol: ProtocolVersion.Value)(f: KafkaClient[Task] => Stream[Task, A]): Stream[Task, A] = {
+    withKafkaSingleton(version) { (_, kafkaDockerId) =>
       time.sleep(1.second) >>
       Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
       KafkaClient(Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
-        awaitLeaderAvailable(kc, testTopicA, part0).drain ++ Stream.emit(kc)
+        awaitLeaderAvailable(kc, testTopicA, part0).drain ++ f(kc)
       }
     }
   }

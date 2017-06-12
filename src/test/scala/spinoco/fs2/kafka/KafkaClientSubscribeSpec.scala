@@ -16,7 +16,7 @@ class KafkaClientSubscribeSpec extends Fs2KafkaRuntimeSpec {
 
     "subscribe-at-zero" in {
 
-      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+      ((withKafkaClient(runtime, protocol) { kc =>
       Stream.eval(publishNMessages(kc, 0, 20)) >>
       kc.subscribe(testTopicA, part0, offset(0l)).take(10)
       } runLog  ) unsafeTimed 30.seconds unsafeRun) shouldBe generateTopicMessages(0, 10, 20)
@@ -24,7 +24,7 @@ class KafkaClientSubscribeSpec extends Fs2KafkaRuntimeSpec {
 
 
     "subscribe-at-zero-empty" in {
-      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+      ((withKafkaClient(runtime, protocol) { kc =>
         concurrent.join(Int.MaxValue)(Stream(
           kc.subscribe(testTopicA, part0, offset(0l))
           , time.sleep_(1.second) ++ Stream.eval_(publishNMessages(kc, 0, 20))
@@ -34,7 +34,7 @@ class KafkaClientSubscribeSpec extends Fs2KafkaRuntimeSpec {
     }
 
     "subscriber before head" in {
-      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+      ((withKafkaClient(runtime, protocol) { kc =>
         concurrent.join(Int.MaxValue)(Stream(
           kc.subscribe(testTopicA, part0, offset(-1l))
           , time.sleep_(1.second) ++ Stream.eval_(publishNMessages(kc, 0, 20))
@@ -43,7 +43,7 @@ class KafkaClientSubscribeSpec extends Fs2KafkaRuntimeSpec {
     }
 
     "subscriber after head" in {
-      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+      ((withKafkaClient(runtime, protocol) { kc =>
         concurrent.join(Int.MaxValue)(Stream(
           Stream.eval_(publishNMessages(kc, 0, 20)) ++ kc.subscribe(testTopicA, part0, TailOffset)
           , time.sleep_(1.second) ++ Stream.eval_(publishNMessages(kc, 20, 40))

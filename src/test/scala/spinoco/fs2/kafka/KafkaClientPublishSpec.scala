@@ -23,7 +23,7 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } drain) ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
-      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+      ((withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
         time.sleep(2.second) >> // wait for message to be accepted
         kc.subscribe(testTopicA, part0, offset(0l)).map { x => println(s">>> $x"); x }.take(10)
@@ -39,7 +39,7 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } map (Left(_))) ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
-      (((withKafkaClient(runtime, protocol) flatMap { kc =>
+      (((withKafkaClient(runtime, protocol) { kc =>
           publish(kc) ++
           (kc.subscribe(testTopicA, part0, offset(0l)) map { x => println(s">>> $x"); x } map (Right(_)))
       } take 20)  runLog) unsafeTimed 30.seconds unsafeRun) shouldBe
@@ -56,7 +56,7 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } drain)  ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
-      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+      ((withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
         time.sleep(3.second) >> // wait for message to be accepted
         kc.subscribe(testTopicA, part0, offset(0l))  map { x => println(s">>> $x"); x }  take (100)
@@ -73,7 +73,7 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } map (Left(_))) ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
-      (((withKafkaClient(runtime, protocol) flatMap { kc =>
+      (((withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
         (kc.subscribe(testTopicA, part0, offset(0l))  map { x => println(s">>> $x"); x } map (Right(_)))
       } take 110 ) runLog ) unsafeTimed 30.seconds unsafeRun) shouldBe
@@ -91,7 +91,7 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } drain) ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
-      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+      ((withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
         time.sleep(3.second) >> // wait for message to be accepted
         kc.subscribe(testTopicA, part0, offset(0l)). map { x => println(s">>> $x"); x }.take(100)
@@ -108,7 +108,7 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } map {x => println(s"SENT: $x"); x} map (Left(_))) ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
-      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+      ((withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
         ((kc.subscribe(testTopicA, part0, offset(0l)) map { x => println(s"RECVD $x"); x } map (Right(_))) take 100) onFinalize { Task.delay { println("SUB DONE")} }
       } runLog ) unsafeTimed 30.seconds unsafeRun) shouldBe
@@ -126,7 +126,7 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } map (Left(_))) ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
-      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+      ((withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
         ((kc.subscribe(testTopicA, part0, offset(5l)) map { x => println(s">>> $x"); x } map (Right(_)))  take 95)
       } runLog ) unsafeTimed 30.seconds unsafeRun) shouldBe
@@ -144,7 +144,7 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } drain) ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
-      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+      ((withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
         time.sleep(3.second) >> // wait for message to be accepted
         kc.subscribe(testTopicA, part0, offset(0l)). map { x => println(s">>> $x"); x }.take(100)
@@ -161,7 +161,7 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } map (Left(_))) ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
-      ((withKafkaClient(runtime, protocol) flatMap { kc =>
+      ((withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
         ((kc.subscribe(testTopicA, part0, offset(0l))  map { x => println(s">>> $x"); x } map (Right(_))) take 100)
       } runLog ) unsafeTimed 30.seconds unsafeRun ) shouldBe

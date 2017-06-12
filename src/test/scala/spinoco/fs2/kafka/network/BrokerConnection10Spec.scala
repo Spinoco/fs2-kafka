@@ -21,7 +21,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
   "Kafka 0.10.0" - {
     "Publish and subscribe message" in {
       val result =
-        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0).flatMap { case (zkId, kafkaId) =>
+        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0) { case (zkId, kafkaId) =>
           val createTopic = Stream.eval_(createKafkaTopic(kafkaId, testTopic1))
           val publishOne = (Stream(
             RequestMessage(
@@ -68,7 +68,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
 
     "Fetch metadata for topics" in {
       val result =
-        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0).flatMap { case (zkId, kafkaId) =>
+        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0) { case (zkId, kafkaId) =>
           val createTopic1 = Stream.eval_(createKafkaTopic(kafkaId, testTopic1))
           val createTopic2 = Stream.eval_(createKafkaTopic(kafkaId, testTopic2))
 
@@ -96,7 +96,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
 
     "Fetch offsets topics" in {
       val result =
-        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0).flatMap { case (zkId, kafkaId) =>
+        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0) { case (zkId, kafkaId) =>
           val createTopic1 = Stream.eval_(createKafkaTopic(kafkaId, testTopic1))
 
           val fetchOffsets=
