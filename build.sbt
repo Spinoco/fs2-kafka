@@ -23,7 +23,6 @@ lazy val commonSettings = Seq(
     "-Ywarn-unused-import"
    ),
    javaOptions += "-Djava.net.preferIPv4Stack=true",
-   fork in (Test) := true,
    scalacOptions in (Compile, console) ~= {_.filterNot("-Ywarn-unused-import" == _)},
    scalacOptions in (Test, console) <<= (scalacOptions in (Compile, console)),
    libraryDependencies ++= Seq(
@@ -54,6 +53,7 @@ lazy val commonSettings = Seq(
 
 lazy val testSettings = Seq(
   parallelExecution in Test := false,
+  fork in Test := true,
   testOptions in Test += Tests.Argument(TestFrameworks.ScalaTest, "-oDF"),
   publishArtifact in Test := true
 )

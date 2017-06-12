@@ -75,9 +75,11 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
     */
   def startZk(port:Int = DefaultZkPort):Task[String @@ DockerId] = {
     for {
+      _ <- Task.delay { println(s"DOCKER INIT ZK @$port") }
       _ <- dockerVersion.flatMap(_.fold[Task[String]](Task.fail(new Throwable("Docker is not available")))(Task.now))
+      _ <- availableImages map { avail => println(s"DOCKER HAS CURRENT $avail IMAGES RUNNING") }
       _ <- installImageWhenNeeded(ZookeeperImage)
-      - <- Task.delay { println(s"STARTING ZK @$port") }
+      _ <- Task.delay { println(s"STARTING ZK @$port") }
       runId <- runImage(ZookeeperImage,None)(
         "--restart=no"
         , "--net=fs2-kafka-network"
