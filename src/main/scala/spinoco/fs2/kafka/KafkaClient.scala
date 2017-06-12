@@ -422,9 +422,7 @@ object KafkaClient {
       } toMap
 
       ClientState(
-        brokers = s.brokers ++ newBrokers.map { case (brokerId, state) =>
-          brokerId -> s.brokers.getOrElse(brokerId, state)
-        }
+        brokers = s.brokers ++ newBrokers 
         , topics = s.topics ++ newTopics
       )
     }

@@ -142,7 +142,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
     Stream.eval(createNetwork("fs2-kafka-network")) >>
     Stream.eval(startZk()).flatMap { zkId =>
-    awaitZKStarted(zkId) ++
+    awaitZKStarted(zkId) ++ time.sleep_(2.seconds) ++
     Stream.eval(startK(version, 1)).flatMap { kafkaId =>
       (awaitKStarted(version, kafkaId) ++ Stream.emit(zkId -> kafkaId))
       .onFinalize {
@@ -239,7 +239,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
     Stream.eval_(createNetwork("fs2-kafka-network")) ++
     Stream.bracket(startZk())(
       zkId => {
-        awaitZKStarted(zkId) ++ Stream.bracket(startK(version, 1))(
+        awaitZKStarted(zkId) ++ time.sleep_(2.seconds) ++ Stream.bracket(startK(version, 1))(
           broker1 => awaitKStarted(version, broker1) ++ time.sleep_(2.seconds) ++ Stream.bracket(startK(version, 2))(
             broker2 => awaitKFollowerReady(version, broker2, 2) ++ time.sleep_(2.seconds) ++ Stream.bracket(startK(version, 3))(
               broker3 => awaitKFollowerReady(version, broker3, 3) ++ time.sleep_(2.seconds) ++ Stream.emit(KafkaNodes(zkId, Map(tag[Broker](1) -> broker1, tag[Broker](2) -> broker2, tag[Broker](3) -> broker3)))
@@ -288,14 +288,14 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   def awaitLeaderAvailable(client: KafkaClient[Task], topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[Task, BrokerAddress] = {
     val leaderReady =  client.leaders.map { _.get((topic, partition)) }
-    leaderReady.discrete.unNone.map { x => println(s"TOPOLOGY: $x"); x}.take(1) mergeDrainR
-    ((time.awakeEvery(1.second) evalMap { _ => println(s"Refreshing topology: $topic $partition"); client.refreshTopology }) interruptWhen leaderReady.map { _.nonEmpty })
+    leaderReady.discrete .map { x => println(s"LEADER for test: $x") ; x }.unNone.map { x => println(s"TOPOLOGY: $x"); x}.take(1) mergeDrainR
+    ((time.awakeEvery(1.second) evalMap { _ => println(s"Refreshing topology (SPEC): $topic $partition"); client.refreshTopology }) interruptWhen leaderReady.map { _.nonEmpty })
   }
 
   def awaitNewLeaderAvailable(client: KafkaClient[Task], topic: String @@ TopicName, partition: Int @@ PartitionId, previous: BrokerAddress): Stream[Task, BrokerAddress] = {
     val leaderReady =  client.leaders.map { _.get((topic, partition)) }
-    leaderReady.discrete.filter(! _.contains(previous)).unNone.take(1) map { x => println(s"NEW LEADER AVAILABLE: $x"); x} mergeDrainR
-    ((time.awakeEvery(1.second) evalMap { _ => println(s"Refreshing topology: $topic $partition"); client.refreshTopology }) interruptWhen leaderReady.map { _.filterNot(_ == previous).nonEmpty })
+    leaderReady.discrete.map { x => println(s"CLUSTER LEADER for test: $x") ; x }. filter(! _.contains(previous)).unNone.take(1) map { x => println(s"NEW LEADER AVAILABLE: $x"); x} mergeDrainR
+    ((time.awakeEvery(1.second) evalMap { _ => println(s"Refreshing topology (SPEC): $topic $partition"); client.refreshTopology }) interruptWhen leaderReady.map { _.filterNot(_ == previous).nonEmpty })
   }
 
 
