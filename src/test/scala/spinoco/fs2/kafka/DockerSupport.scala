@@ -58,18 +58,28 @@ object DockerSupport {
     * @return
     */
   def followImageLog(imageId:String @@ DockerId)(implicit F:Async[Task]):Stream[Task,String] = {
+    Stream.eval(async.semaphore(1)) flatMap { semaphore =>
+    Stream.eval(Async.refOf(false)) flatMap { isDone =>
     Stream.eval(async.unboundedQueue[Task,String]).flatMap { q =>
+
+      def enqueue(s: String): Unit = {
+        semaphore.increment >>
+        isDone.get.flatMap { done => if (!done) q.enqueue1(s) else Task.now(()) } >>
+        semaphore.decrement
+      } unsafeRun
+
       val logger = new ProcessLogger {
         def buffer[T](f: => T): T = f
-        def out(s: => String): Unit = q.enqueue1(s).unsafeRun()
-        def err(s: => String): Unit = q.enqueue1(s).unsafeRun()
+        def out(s: => String): Unit = enqueue(s)
+
+        def err(s: => String): Unit = enqueue(s)
       }
 
       Stream.bracket(Task.delay(Process(s"docker logs -f $imageId").run(logger)))(
         _ => q.dequeue
-        , p => Task.delay(p.destroy())
+        , p => semaphore.increment >> isDone.modify(_ => true) >> Task.delay(p.destroy()) >> semaphore.decrement
       )
-    }
+    }}}
   }
 
   def runningImages: Task[Set[String @@ DockerId]] = Task.delay {
