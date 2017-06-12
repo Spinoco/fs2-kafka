@@ -857,21 +857,31 @@ object KafkaClient {
 
         // main runner
         // this never terminates
-        def runner: Stream[F, Unit] = {
+        def runner(lastFailed: Option[Int @@ Broker]): Stream[F, Unit] = {
           getLeader flatMap {
             case None =>
-              leaderUnavailable ++ runner
+              leaderUnavailable ++ runner(lastFailed)
 
             case Some(leader) =>
-              // connection with leader will always fail with error.
-              // so when that happens, all open requests are completed and runner is rerun to switch likely to leaderUnavailable.
-              // as the last action runner is restarted
-              leaderAvailable(leader) onError { failure =>
-                L.error2(s"Failure of publishing connection to $topicId[$partition] at broker $leader", failure) >>
-                Stream.eval(completeNotProcessed(failure)) >>
-                Stream.eval(stateSignal.modify(_.invalidateLeader(topicId, partition, leader.brokerId))) >>
-                runner
+              lastFailed match {
+                case Some(failedBrokerId) if leader.brokerId == failedBrokerId =>
+                  // this indicates that cluster sill thinks the leader is same as the one that failed us, for that reason
+                  // we have to suspend execution for while and retry in FiniteDuration
+                  L.warn2(s"New elected leader is same like the old one, sleeping for $failureDelay before retrying: $topicId[$partition] at broker $leader") >>
+                  time.sleep(failureDelay) >>
+                  runner(None)
+
+                case _ =>
+                  // connection with leader will always fail with error.
+                  // so when that happens, all open requests are completed and runner is rerun to switch likely to leaderUnavailable.
+                  // as the last action runner is restarted
+                  leaderAvailable(leader) onError { failure =>
+                    L.error2(s"Failure of publishing connection to $topicId[$partition] at broker $leader", failure) >>
+                      Stream.eval(completeNotProcessed(failure)) >>
+                      runner(Some(leader.brokerId))
+                  }
               }
+
           }
         }
 
@@ -880,7 +890,7 @@ object KafkaClient {
 
           def run: F[Unit] =
             L.info(s"Starting publish connection for $topicId[$partition]") >>
-            (runner interruptWhen termSignal).run.attempt flatMap { r => completeNotProcessed(r.left.toOption.getOrElse(ClientTerminated)) }
+            (runner(None) interruptWhen termSignal).run.attempt flatMap { r => completeNotProcessed(r.left.toOption.getOrElse(ClientTerminated)) }
 
           def shutdown: F[Unit] =
             L.info(s"Shutting-down publish connection for $topicId[$partition]") >> termSignal.set(true)

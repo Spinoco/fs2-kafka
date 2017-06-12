@@ -103,7 +103,6 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
       }
 
       ((withKafkaClient(runtime, protocol) flatMap { kc =>
-        println("ABOUT TO PUBLISH XXX")
         publish(kc) ++
         ((kc.subscribe(testTopicA, part0, offset(0l)) map { x => println(s"RECVD $x"); x } map (Right(_))) take 100) onFinalize { Task.delay { println("SUB DONE")} }
       } runLog ) unsafeTimed 30.seconds unsafeRun) shouldBe
