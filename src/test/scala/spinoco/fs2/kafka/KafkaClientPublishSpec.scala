@@ -17,9 +17,10 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
     "publish-unsafe" in {
 
       def publish(kc: KafkaClient[Task]) = {
-        Stream.range(0, 10) evalMap { idx =>
+        Stream.eval(Task.delay(println("START PUBLISH"))) >>
+          (Stream.range(0, 10) evalMap { idx =>
           kc.publishUnsafe1(testTopicA, part0, ByteVector(1),  ByteVector(idx))
-        } drain
+        } drain) ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
       ((withKafkaClient(runtime, protocol) flatMap { kc =>
@@ -32,9 +33,10 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
 
     "publish-response" in {
       def publish(kc: KafkaClient[Task]) = {
-        Stream.range(0, 10) evalMap { idx =>
+        Stream.eval(Task.delay(println("START PUBLISH"))) >>
+          (Stream.range(0, 10) evalMap { idx =>
           kc.publish1(testTopicA, part0, ByteVector(1),  ByteVector(idx), requireQuorum = false, serverAckTimeout = 3.seconds)
-        } map (Left(_))
+        } map (Left(_))) ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
       (((withKafkaClient(runtime, protocol) flatMap { kc =>
@@ -48,9 +50,10 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
 
     "publishN-unsafe" in {
       def publish(kc: KafkaClient[Task]) = {
-        Stream.range(0, 10) evalMap { idx =>
+        Stream.eval(Task.delay(println("START PUBLISH"))) >>
+          (Stream.range(0, 10) evalMap { idx =>
           kc.publishUnsafeN(testTopicA, part0, compress = None)(Chunk.seq(for { i <- 0 until 10} yield (ByteVector(i), ByteVector(i*idx))))
-        } drain
+        } drain)  ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
       ((withKafkaClient(runtime, protocol) flatMap { kc =>
@@ -64,9 +67,10 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
 
     "publishN-response" in {
       def publish(kc: KafkaClient[Task]) = {
+        (Stream.eval(Task.delay(println("START PUBLISH"))) >>
         Stream.range(0, 10) evalMap { idx =>
           kc.publishN(testTopicA, part0, requireQuorum = false, serverAckTimeout = 3.seconds, compress = None)(Chunk.seq(for { i <- 0 until 10} yield (ByteVector(i), ByteVector(idx))))
-        } map (Left(_))
+        } map (Left(_))) ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
       (((withKafkaClient(runtime, protocol) flatMap { kc =>
@@ -81,9 +85,10 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
 
     "publishN-unsafe-compressed-gzip" in {
       def publish(kc: KafkaClient[Task]) = {
-        Stream.range(0, 10) evalMap { idx =>
+        Stream.eval(Task.delay(println("START PUBLISH"))) >>
+          (Stream.range(0, 10) evalMap { idx =>
           kc.publishUnsafeN(testTopicA, part0, compress = Some(Compression.GZIP))(Chunk.seq(for {i <- 0 until 10} yield (ByteVector(i), ByteVector(i*idx))))
-        } drain
+        } drain) ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
       ((withKafkaClient(runtime, protocol) flatMap { kc =>
@@ -97,9 +102,10 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
 
     "publishN-response-compressed-gzip" in {
       def publish(kc: KafkaClient[Task]) = {
-        Stream.range(0, 10) evalMap { idx =>
+        Stream.eval(Task.delay(println("START PUBLISH"))) >>
+          (Stream.range(0, 10) evalMap { idx =>
           kc.publishN(testTopicA, part0, requireQuorum = false, serverAckTimeout = 3.seconds, compress = Some(Compression.GZIP))(Chunk.seq(for { i <- 0 until 10 } yield (ByteVector(i), ByteVector(idx))))
-        } map {x => println(s"SENT: $x"); x} map (Left(_))
+        } map {x => println(s"SENT: $x"); x} map (Left(_))) ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
       ((withKafkaClient(runtime, protocol) flatMap { kc =>
@@ -114,9 +120,10 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
 
     "publishN-response-compressed-gzip-not-aligned" in {
       def publish(kc: KafkaClient[Task]) = {
-        Stream.range(0, 10) evalMap { idx =>
+        Stream.eval(Task.delay(println("START PUBLISH"))) >>
+          (Stream.range(0, 10) evalMap { idx =>
           kc.publishN(testTopicA, part0, requireQuorum = false, serverAckTimeout = 3.seconds, compress = Some(Compression.GZIP))(Chunk.seq(for { i <- 0 until 10 } yield (ByteVector(i), ByteVector(idx))))
-        } map (Left(_))
+        } map (Left(_))) ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
       ((withKafkaClient(runtime, protocol) flatMap { kc =>
@@ -131,9 +138,10 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
 
     "publishN-unsafe-compressed-snappy" in {
       def publish(kc: KafkaClient[Task]) = {
-        Stream.range(0, 10) evalMap { idx =>
+        Stream.eval(Task.delay(println("START PUBLISH"))) >>
+          (Stream.range(0, 10) evalMap { idx =>
           kc.publishUnsafeN(testTopicA, part0, compress = Some(Compression.Snappy))(Chunk.seq(for {i <- 0 until 10} yield (ByteVector(i), ByteVector(i*idx))))
-        } drain
+        } drain) ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
       ((withKafkaClient(runtime, protocol) flatMap { kc =>
@@ -147,9 +155,10 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
 
     "publishN-response-compressed-snappy" in {
       def publish(kc: KafkaClient[Task]) = {
-        Stream.range(0, 10) evalMap { idx =>
+        Stream.eval(Task.delay(println("START PUBLISH"))) >>
+          (Stream.range(0, 10) evalMap { idx =>
           kc.publishN(testTopicA, part0, requireQuorum = false, serverAckTimeout = 3.seconds, compress = Some(Compression.Snappy))(Chunk.seq(for { i <- 0 until 10 } yield (ByteVector(i), ByteVector(idx))))
-        } map (Left(_))
+        } map (Left(_))) ++ Stream.eval_(Task.delay(println("STOP PUBLISH")))
       }
 
       ((withKafkaClient(runtime, protocol) flatMap { kc =>
