@@ -13,7 +13,7 @@ import spinoco.fs2.kafka.Logger.Level
 trait Logger[F[_]] {
 
   /** performs log on given level. Note that throwable may be null. **/
-  def log(level:Level.Value, msg: => String, throwable: Throwable):F[Unit]
+  def log(level: Level.Value, msg: => String, throwable: Throwable): F[Unit]
 
 
 }
@@ -27,16 +27,16 @@ object Logger {
 
 
   implicit class LoggerSyntax[F[_]](val self:Logger[F]) extends AnyVal{
-    @inline def trace(msg: => String, thrown:Throwable = null):F[Unit] = self.log(Level.Trace, msg, thrown)
-    @inline def debug(msg: => String, thrown:Throwable = null):F[Unit] = self.log(Level.Debug, msg, thrown)
-    @inline def info(msg: => String, thrown:Throwable = null):F[Unit] = self.log(Level.Info, msg, thrown)
-    @inline def warn(msg: => String, thrown:Throwable = null):F[Unit] = self.log(Level.Warn, msg, thrown)
-    @inline def error(msg: => String, thrown:Throwable = null):F[Unit] = self.log(Level.Error, msg, thrown)
-    @inline def trace_(msg: => String, thrown:Throwable = null):Stream[F,Nothing] = Stream.eval_(self.log(Level.Trace, msg, thrown))
-    @inline def debug_(msg: => String, thrown:Throwable = null):Stream[F,Nothing] = Stream.eval_(self.log(Level.Debug, msg, thrown))
-    @inline def info_(msg: => String, thrown:Throwable = null):Stream[F,Nothing] = Stream.eval_(self.log(Level.Info, msg, thrown))
-    @inline def warn_(msg: => String, thrown:Throwable = null):Stream[F,Nothing] = Stream.eval_(self.log(Level.Warn, msg, thrown))
-    @inline def error_(msg: => String, thrown:Throwable = null):Stream[F,Nothing] = Stream.eval_(self.log(Level.Error, msg, thrown))
+    @inline def trace(msg: => String, thrown:Throwable = null): F[Unit] = self.log(Level.Trace, msg, thrown)
+    @inline def debug(msg: => String, thrown:Throwable = null): F[Unit] = self.log(Level.Debug, msg, thrown)
+    @inline def info(msg: => String, thrown:Throwable = null): F[Unit] = self.log(Level.Info, msg, thrown)
+    @inline def warn(msg: => String, thrown:Throwable = null): F[Unit] = self.log(Level.Warn, msg, thrown)
+    @inline def error(msg: => String, thrown:Throwable = null): F[Unit] = self.log(Level.Error, msg, thrown)
+    @inline def trace2(msg: => String, thrown:Throwable = null): Stream[F, Unit] = Stream.eval(self.log(Level.Trace, msg, thrown))
+    @inline def debug2(msg: => String, thrown:Throwable = null): Stream[F, Unit] = Stream.eval(self.log(Level.Debug, msg, thrown))
+    @inline def info2(msg: => String, thrown:Throwable = null): Stream[F, Unit] = Stream.eval(self.log(Level.Info, msg, thrown))
+    @inline def warn2(msg: => String, thrown:Throwable = null): Stream[F, Unit] = Stream.eval(self.log(Level.Warn, msg, thrown))
+    @inline def error2(msg: => String, thrown:Throwable = null): Stream[F, Unit] = Stream.eval(self.log(Level.Error, msg, thrown))
   }
 
 

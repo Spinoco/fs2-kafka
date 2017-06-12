@@ -3,6 +3,7 @@ package spinoco.fs2.kafka
 import java.nio.channels.AsynchronousChannelGroup
 import java.time.LocalDateTime
 import java.util.Date
+import java.util.concurrent.atomic.AtomicInteger
 
 import fs2._
 import fs2.util.{Async, Attempt, Effect}
@@ -271,6 +272,7 @@ object KafkaClient {
   protected[kafka] object impl {
 
     sealed trait PartitionPublishConnection[F[_]] {
+      def run: F[Unit]
       def shutdown: F[Unit]
       def publish(data: Vector[Message], timeout: FiniteDuration, acks: RequiredAcks.Value): F[Option[(Long @@ Offset, Option[Date])]]
     }
@@ -563,7 +565,7 @@ object KafkaClient {
       Stream.eval(F.refOf((firstOffset, 0))) flatMap { startFromRef =>
         def fetchFromBroker(broker: BrokerData): Stream[F, TopicMessage] = {
           def tryRecover(rsn: Throwable): Stream[F, TopicMessage] = {
-            Logger.error_(s"Leader $broker failed fetch $topicId[$partition]", rsn ) ++
+            Logger.error2(s"Leader $broker failed fetch $topicId[$partition]", rsn ) >>
             Stream.eval(startFromRef.get map { _._2 }) flatMap { failures =>
               if (failures >= leaderFailureMaxAttempts) Stream.fail(rsn)
               else {
@@ -779,8 +781,9 @@ object KafkaClient {
     )(implicit F: Async[F], S: Scheduler, L: Logger[F]) : F[PartitionPublishConnection[F]] = {
       type Response = Option[(Long @@ Offset, Option[Date])]
       async.signalOf[F, Boolean](false) flatMap { termSignal =>
-      async.synchronousQueue[F, (ProduceRequest, Attempt[Response] => F[Unit])] flatMap { queue =>
-      F.refOf[Map[Int, (ProduceRequest, Attempt[Response] => F[Unit])]](Map.empty) flatMap { ref =>
+      async.unboundedQueue[F, (ProduceRequest, Attempt[Response] => F[Unit])] flatMap { queue =>
+      F.refOf[Map[Int, (ProduceRequest, Attempt[Response] => F[Unit])]](Map.empty) map { ref =>
+        val aint = new AtomicInteger(0)
         def registerMessage(in: (ProduceRequest, Attempt[Response] => F[Unit]), idx: Int): F[RequestMessage] = {
           val (produce, cb) = in
 
@@ -795,107 +798,179 @@ object KafkaClient {
             case RequiredAcks.NoResponse => cb(Right(None)) as msg
             case _ => ref.modify { _ + (idx -> ((produce, cb))) } as msg
           }
-
-
         }
 
-        def completeNotProcessed: F[Unit] = {
+        def getRequest(response: ResponseMessage): F[Option[(ProduceRequest, Attempt[Response] => F[Unit])]] = {
+          ref.modify2 { m => (m - response.correlationId, m.get(response.correlationId)) } map { _._2 }
+        }
+
+
+        def completeNotProcessed(failure: Throwable): F[Unit] = {
           ref.modify(_ => Map.empty) map { _.previous.values } flatMap { toCancel =>
-            val fail = Left(ClientTerminated)
+            val fail = Left(failure)
             toCancel.toSeq.traverse(_._2 (fail)) as (())
           }
         }
 
         val leaderSignal = stateSignal.map( _.leaderFor(topicId, partition) )
 
-        // This runs the connection with partition leader.
-        // this await leader for given topic/partition, then establishes connection to that partition // leader
-        // and sends publish requests to broker. Each request is then completed once response is received.
-        // if response is invalid or contains error the response is completed with failure, including the cases where
-        // leader changed.
-        //
-        // if leader is not available, this will fail all incoming requests with `LeaderNotAvailable` failure.
-        // Also in this state we fill periodically try to fetch new partition metadata to eventually see if the leader is available again
-        //
-        //
-        val runner =
-          (leaderSignal.continuous map { x => println(s"LEADER PUB: $topicId[$partition]: $x"); x } flatMap {
+        // When leader is available this is run to publish any incoming messages to server for processing
+        // Message is processed from queue, then added to map of open messages and then send to server
+        // this may only finish when either broker closes connection or fails.
+        def leaderAvailable(leader: BrokerData): Stream[F, Unit] = {
+          L.info2(s"Leader available for publishing to $topicId[$partition] : $leader") >>
+          (((queue.dequeue.zipWithIndex evalMap (registerMessage _ tupled)) through connection(leader.address)) flatMap { response =>
+            Stream.eval(getRequest(response)) flatMap {
+              case Some((req, cb)) =>
+                response match {
+                  case ResponseMessage(_, produceResp: ProduceResponse) =>
+                    produceResp.data.find(_._1 == topicId).flatMap(_._2.find(_._1 == partition)) match {
+                      case None => Stream.fail(UnexpectedResponse(leader.address, response))
 
-            case None =>
-              L.error_(s"Leader unavailable for publishing to $topicId[$partition]")  ++
-              // leader is not available just quickly terminate the requests, so they may be eventually rescheduled
-              // once leader will be available this will get interrupted and we start again
-              (queue.dequeue.evalMap { case (_, cb) =>
-                cb(Left(LeaderNotAvailable(topicId, partition)))
-              } mergeDrainR (time.awakeEvery(refreshMetaDelay) evalMap { _ => refreshMeta(topicId) })) interruptWhen leaderSignal.map { _.nonEmpty }
-
-
-            case Some(leader) =>
-              L.info_(s"Leader available for publishing to $topicId[$partition] : $leader")  ++
-              (((queue.dequeue.zipWithIndex evalMap (registerMessage _ tupled)) through connection(leader.address)) flatMap { response =>
-
-                Stream.eval(ref.modify2 { m => (m - response.correlationId, m.get(response.correlationId)) }) flatMap { case (c, found) => found match {
-                  case None => Stream.fail(UnexpectedResponse(leader.address, response))
-                  case Some((req, cb)) =>
-                    response match {
-                      case ResponseMessage(_, produceResp: ProduceResponse) =>
-                        produceResp.data.find(_._1 == topicId).flatMap(_._2.find(_._1 == partition)) match {
-                          case None => Stream.fail(UnexpectedResponse(leader.address, response))
-                          case Some((_, result)) => result.error match {
-                            case None => Stream.eval_(cb(Right(Some((result.offset, result.time)))))
-                            case Some(err) => Stream.eval_(cb(Left(BrokerReportedFailure(leader.address, req, err))))
-                          }
-                        }
-
-                      case _ => Stream.fail(UnexpectedResponse(leader.address, response))
+                      case Some((_, result)) => result.error match {
+                        case None => Stream.eval_(cb(Right(Some((result.offset, result.time)))))
+                        case Some(err) => Stream.eval_(cb(Left(BrokerReportedFailure(leader.address, req, err))))
+                      }
                     }
 
-                }}
-              } append {
-                // this is consulted only when the connection with broker was terminated early (broker hung up.
-                // in that case we have to fail the stream so the OnError Handler will kick in
-                Stream.fail(new Throwable("Broker terminated connection"))
-
-              }) onError { failure =>
-                // when the current leader failed we will remve that leader from the leader of partition and that
-                // shall cause this to enter state w/o leader
-                // every `refreshMetaDelay` we the check if the leader is available.
-                L.error_(s"Failure of publishing connection to $topicId[$partition] at broker $leader", failure) ++
-                Stream.eval_ {
-                  // cancel all pending publishes with this error, sleep guard interval and re-query metadata
-                  ref.modify(_ => Map.empty) map { _.previous.values.toSeq } flatMap { toCancel =>
-                    val fail = Left(failure)
-                    toCancel.traverse(_._2 (fail))
-                  }
-                } ++ Stream.eval_(stateSignal.modify { _.invalidateLeader(topicId, partition, leader.brokerId) })
-              }
-          } interruptWhen termSignal ) onFinalize completeNotProcessed
-
-
-        F.start(runner.run) as {
-
-          new PartitionPublishConnection[F] {
-
-            def shutdown: F[Unit] = termSignal.set(true)
-
-            def publish(messages: Vector[Message], timeout: FiniteDuration, acks: RequiredAcks.Value): F[Option[(Long @@ Offset, Option[Date])]] = {
-              F.ref[Attempt[Response]] flatMap { cbRef =>
-                val request = ProduceRequest(
-                  requiredAcks = acks
-                  , timeout = timeout
-                  , messages = Vector((topicId, Vector((partition, messages))))
-                )
-
-                queue.enqueue1((request, cbRef.setPure)) >> cbRef.get flatMap {
-                  case Left(err) => F.fail(err)
-                  case Right(r) => F.pure(r)
+                  case _ => Stream.fail(UnexpectedResponse(leader.address, response))
                 }
 
+              case None =>
+                Stream.fail(UnexpectedResponse(leader.address, response))
+            }
+          }) ++ Stream.fail(new Throwable("Broker terminated connection")) // the first part of the stream shall never terminate unless broker terminates connection, which we convert to failure
+        }
+
+        // when leader is not availablr this rejects all requests.
+        // This terminates when the `refreshMetaDelay` timeout expires, and that shall cuse runner to be re-evalauted, potentially
+        // resulting in new leader to be re-queried
+        def leaderUnavailable: Stream[F, Unit] = {
+          L.error2(s"(${aint.incrementAndGet()})Leader unavailable for publishing to $topicId[$partition]") >> {
+            (queue.dequeue.evalMap { case (_, cb) => cb(Left(LeaderNotAvailable(topicId, partition))) } drain) mergeHaltBoth
+            time.sleep(refreshMetaDelay)
+          }
+        }
+
+        def getLeader: Stream[F, Option[BrokerData]] = Stream.eval {
+          refreshMeta(topicId) >>
+          leaderSignal.get
+        }
+
+        // main runner
+        // this never terminates
+        def runner: Stream[F, Unit] = {
+          getLeader flatMap {
+            case None =>
+              leaderUnavailable ++ runner
+
+            case Some(leader) =>
+              // connection with leader will always fail with error.
+              // so when that happens, all open requests are completed and runner is rerun to switch likely to leaderUnavailable.
+              // as the last action runner is restarted
+              leaderAvailable(leader) onError { failure =>
+                L.error2(s"Failure of publishing connection to $topicId[$partition] at broker $leader", failure) >>
+                Stream.eval(completeNotProcessed(failure)) >>
+                Stream.eval(stateSignal.modify(_.invalidateLeader(topicId, partition, leader.brokerId))) >>
+                runner
+              }
+          }
+        }
+
+
+
+//        // This runs the connection with partition leader.
+//        // this await leader for given topic/partition, then establishes connection to that partition // leader
+//        // and sends publish requests to broker. Each request is then completed once response is received.
+//        // if response is invalid or contains error the response is completed with failure, including the cases where
+//        // leader changed.
+//        //
+//        // if leader is not available, this will fail all incoming requests with `LeaderNotAvailable` failure.
+//        // Also in this state we fill periodically try to fetch new partition metadata to eventually see if the leader is available again
+//        //
+//        //
+//        val runner =
+//          (leaderSignal.continuous map { x => println(s"LEADER PUB: $topicId[$partition]: $x"); x } flatMap {
+//
+//            case None =>
+//              L.error_(s"(${aint.incrementAndGet()})Leader unavailable for publishing to $topicId[$partition]") ++ (
+//                // leader is not available just quickly terminate the requests, so they may be eventually rescheduled
+//                // once leader will be available this will get interrupted and we start again
+//                (queue.dequeue.evalMap { case (_, cb) => cb(Left(LeaderNotAvailable(topicId, partition))) } drain) mergeHaltBoth
+//                  ((time.awakeEvery(refreshMetaDelay) evalMap { _ => println("REFRESH META"); refreshMeta(topicId) }) interruptWhen (leaderSignal map { x => println(s"INTERR: $x"); x } map { _.nonEmpty }))
+//              )
+//
+//            case Some(leader) =>
+//              L.info_(s"Leader available for publishing to $topicId[$partition] : $leader")  ++
+//              (((queue.dequeue.zipWithIndex evalMap (registerMessage _ tupled)) through connection(leader.address)) flatMap { response =>
+//
+//                Stream.eval(ref.modify2 { m => (m - response.correlationId, m.get(response.correlationId)) }) flatMap { case (c, found) => found match {
+//                  case None => Stream.fail(UnexpectedResponse(leader.address, response))
+//                  case Some((req, cb)) =>
+//                    response match {
+//                      case ResponseMessage(_, produceResp: ProduceResponse) =>
+//                        produceResp.data.find(_._1 == topicId).flatMap(_._2.find(_._1 == partition)) match {
+//                          case None => Stream.fail(UnexpectedResponse(leader.address, response))
+//                          case Some((_, result)) => result.error match {
+//                            case None => Stream.eval_(cb(Right(Some((result.offset, result.time)))))
+//                            case Some(err) => Stream.eval_(cb(Left(BrokerReportedFailure(leader.address, req, err))))
+//                          }
+//                        }
+//
+//                      case _ => Stream.fail(UnexpectedResponse(leader.address, response))
+//                    }
+//
+//                }}
+//              } append {
+//                // this is consulted only when the connection with broker was terminated early (broker hung up.
+//                // in that case we have to fail the stream so the OnError Handler will kick in
+//                Stream.fail(new Throwable("Broker terminated connection"))
+//
+//              }) onError { failure =>
+//                // when the current leader failed we will remve that leader from the leader of partition and that
+//                // shall cause this to enter state w/o leader
+//                // every `refreshMetaDelay` we the check if the leader is available.
+//                L.error_(s"Failure of publishing connection to $topicId[$partition] at broker $leader", failure) ++
+//                Stream.eval_ {
+//                  // cancel all pending publishes with this error, sleep guard interval and re-query metadata
+//                  ref.modify(_ => Map.empty) map { _.previous.values.toSeq } flatMap { toCancel =>
+//                    val fail = Left(failure)
+//                    toCancel.traverse(_._2 (fail))
+//                  }
+//                } ++ Stream.eval_(stateSignal.modify { _.invalidateLeader(topicId, partition, leader.brokerId) })
+//              }
+//          } interruptWhen termSignal.map { x => println(s"TERM SINGNAL: $topicId[$partition] $x"); x } ) onFinalize completeNotProcessed
+
+
+
+
+        new PartitionPublishConnection[F] {
+
+          def run: F[Unit] =
+            L.info(s"Starting publish connection for $topicId[$partition]") >>
+            (runner interruptWhen termSignal).run.attempt flatMap { r => completeNotProcessed(r.left.toOption.getOrElse(ClientTerminated)) }
+
+          def shutdown: F[Unit] =
+            L.info(s"Shutting-down publish connection for $topicId[$partition]") >> termSignal.set(true)
+
+          def publish(messages: Vector[Message], timeout: FiniteDuration, acks: RequiredAcks.Value): F[Option[(Long @@ Offset, Option[Date])]] = {
+            F.ref[Attempt[Response]] flatMap { cbRef =>
+              val request = ProduceRequest(
+                requiredAcks = acks
+                , timeout = timeout
+                , messages = Vector((topicId, Vector((partition, messages))))
+              )
+
+              queue.enqueue1((request, cbRef.setPure)) >> cbRef.get flatMap {
+                case Left(err) => F.fail(err)
+                case Right(r) => F.pure(r)
               }
 
             }
+
           }
         }
+
       }}}
     }
 
@@ -928,9 +1003,21 @@ object KafkaClient {
               case None =>
                 // lets create a new connection and try to swap it in
                 createPublisher(topic, partition) flatMap { ppc =>
-                stateRef.modify { s => if (s.shutdown) s else s.copy(connections = s.connections + ((topic, partition) -> ppc)) } flatMap { c =>
-                  if (c.modified) publish(topic, partition, data, timeout, acks)
-                  else ppc.shutdown >> publish(topic, partition, data, timeout, acks)
+                stateRef.modify { s =>
+                  if (s.shutdown) s
+                  else {
+                    // add to connections only if there is no current connection yet
+                    if (s.connections.isDefinedAt((topic, partition))) s
+                    else s.copy(connections = s.connections + ((topic, partition) -> ppc))
+                  }
+                } flatMap { c =>
+                  if (c.modified) {
+                    // we have won the race, so we shall start the publisher and then publish
+                    F.start(ppc.run) >> publish(topic, partition, data, timeout, acks)
+                  } else  {
+                    // someone else won the ppc, we shall publish to new publisher.
+                    publish(topic, partition, data, timeout, acks)
+                  }
                 }}
 
             }
