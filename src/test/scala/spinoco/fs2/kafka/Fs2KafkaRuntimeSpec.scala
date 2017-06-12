@@ -4,6 +4,7 @@ import java.net.InetAddress
 
 import fs2._
 import fs2.util.syntax._
+import org.scalatest.{Args, Status}
 import scodec.bits.ByteVector
 import shapeless.tag
 import shapeless.tag.@@
@@ -302,5 +303,9 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
     ((time.awakeEvery(1.second) evalMap { _ => println(s"Refreshing topology (SPEC): $topic $partition"); client.refreshTopology }) interruptWhen leaderReady.map { _.filterNot(_ == previous).nonEmpty })
   }
 
-
+   override def runTest(testName: String, args: Args): Status = {
+     println(s"Starting: $testName")
+     try super.runTest(testName, args)
+     finally println(s"Stopping: $testName")
+   }
 }
