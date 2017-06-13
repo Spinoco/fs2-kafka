@@ -277,7 +277,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
 
   def killLeader(client: KafkaClient[Task], nodes: KafkaNodes, topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[Task, Nothing] = {
-    client.leaders.discrete.take(1) map { _((topic, partition)) } flatMap { leader =>
+    client.leaderFor(500.millis)(topic).take(1) map { _((topic, partition)) } flatMap { leader =>
       println(s"KILLING LEADER: $leader")
       leader match {
         case BrokerAddress(_, 9092) => Stream.eval_(killImage(nodes.nodes(tag[Broker](1))))
@@ -291,15 +291,11 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
 
   def awaitLeaderAvailable(client: KafkaClient[Task], topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[Task, BrokerAddress] = {
-    val leaderReady =  client.leaders.map { _.get((topic, partition)) }
-    leaderReady.discrete .map { x => println(s"LEADER for test: $x") ; x }.unNone.map { x => println(s"TOPOLOGY: $x"); x}.take(1) mergeHaltBoth
-      ((time.awakeEvery(1.second) evalMap { _ => println(s"Refreshing topology (SPEC): $topic $partition"); client.refreshTopology }) drain)
+    client.leaderFor(500.millis)(topic).map { x => println(s"FROM THE META MONITOR: $x"); x }.map(_.get((topic, partition))).unNone.take(1)
   }
 
   def awaitNewLeaderAvailable(client: KafkaClient[Task], topic: String @@ TopicName, partition: Int @@ PartitionId, previous: BrokerAddress): Stream[Task, BrokerAddress] = {
-    val leaderReady =  client.leaders.map { _.get((topic, partition)) }
-    leaderReady.discrete.map { x => println(s"CLUSTER LEADER for test: $x") ; x }. filter(! _.contains(previous)).unNone.take(1) map { x => println(s"NEW LEADER AVAILABLE: $x"); x} mergeDrainR
-    ((time.awakeEvery(1.second) evalMap { _ => println(s"Refreshing topology (SPEC): $topic $partition"); client.refreshTopology }) interruptWhen leaderReady.map { _.filterNot(_ == previous).nonEmpty })
+    client.leaderFor(500.millis)(topic).map { x => println(s"FROM THE META MONITOR: $x"); x }.map(_.get((topic, partition)).filterNot(_ == previous)).unNone.take(1)
   }
 
    override def runTest(testName: String, args: Args): Status = {

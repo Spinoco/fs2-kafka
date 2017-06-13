@@ -25,7 +25,7 @@ case class BrokerRequestFailure(address: BrokerAddress,request: Request, thrown:
 /** for supplied request broker has reported failure when respoding **/
 case class BrokerReportedFailure(address: BrokerAddress, request: Request, failure: ErrorType.Value) extends Throwable(s"Broker[$address]: Request reported failure: $failure")
 
-/** for supplied request broker reponded with unexpected response **/
+/** for supplied request broker responded with unexpected response **/
 case class UnexpectedResponse(address: BrokerAddress, response: ResponseMessage) extends Throwable(s"Unexpected response received from $address: $response")
 
 /** Publish to client that has been terminate already **/
