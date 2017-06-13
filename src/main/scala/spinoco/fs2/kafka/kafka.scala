@@ -8,7 +8,7 @@ import fs2.util.Async
 import scodec.bits.ByteVector
 import shapeless.tag
 import shapeless.tag._
-import spinoco.fs2.kafka.state.BrokerAddress
+import spinoco.fs2.kafka.network.BrokerAddress
 import spinoco.protocol.kafka.{Offset, PartitionId, ProtocolVersion, TopicName}
 
 
@@ -71,7 +71,7 @@ package object kafka {
   /** Starting from this offset will assure we starting with most recent messages written to topic (tail) **/
   val TailOffset = offset(Long.MaxValue)
 
-
-  def broker(host: String, port: Int): BrokerAddress = ???
+  /** syntax helper to construct broker address **/
+  def broker(host: String, port: Int): BrokerAddress = BrokerAddress(host, port)
 
 }

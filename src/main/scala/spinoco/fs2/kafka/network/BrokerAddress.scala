@@ -1,21 +1,8 @@
-package spinoco.fs2.kafka.state
-
+package spinoco.fs2.kafka.network
 
 import java.net.InetSocketAddress
 
 import fs2.util.Effect
-import shapeless.tag._
-import spinoco.protocol.kafka.Broker
-
-
-/**
-  * Represents state of the broker.
-  */
-case class  BrokerData(
-  brokerId: Int @@ Broker
-  , address: BrokerAddress
-)
-
 
 
 /**
@@ -34,5 +21,4 @@ case class BrokerAddress(
 }
 
 
-sealed trait BrokerGeneration
 

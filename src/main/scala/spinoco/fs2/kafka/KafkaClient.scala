@@ -5,16 +5,14 @@ import java.time.LocalDateTime
 import java.util.Date
 
 import fs2._
-import fs2.util.{Async, Attempt, Catchable, Effect}
+import fs2.util.{Async, Attempt, Catchable}
 import fs2.util.syntax._
-import fs2.async.mutable
 import scodec.bits.ByteVector
 import shapeless.{Typeable, tag}
 import shapeless.tag._
 import spinoco.fs2.kafka.KafkaClient.impl.PartitionPublishConnection
 import spinoco.fs2.kafka.failure._
-import spinoco.fs2.kafka.network.BrokerConnection
-import spinoco.fs2.kafka.state._
+import spinoco.fs2.kafka.network.{BrokerAddress, BrokerConnection}
 import spinoco.protocol.kafka.Message.SingleMessage
 import spinoco.protocol.kafka.Request._
 import spinoco.protocol.kafka.{ProtocolVersion, Request, _}
@@ -387,57 +385,6 @@ object KafkaClient {
 
 
 
-    /**
-      * Requests refresh of metadata from all seed brokers. All seeds are queried initially, and then first response is returned.
-      * If the query to one broker fails, that is silently ignored (logged). If all queries fail, this fails with failure of NoBrokerAvailable.
-      *
-      * Returns updated state signal from received metadata
-      *
-      * @param seeds      Seed nodes. Must not be empty.
-      */
-    def refreshFullMetadataFromBrokers[F[_]](
-      seeds: Set[BrokerAddress]
-      , fetchMetadata: (BrokerAddress, MetadataRequest) => F[MetadataResponse]
-      , signal: mutable.Signal[F, ClientState]
-    )(implicit F: Async[F], Logger: Logger[F]): F[Unit] = {
-        signal.get.map(_.brokers.values.map(_.address).toSet ++ seeds) flatMap { brokers =>
-          (concurrent.join(Int.MaxValue)(
-            Stream.emits(brokers.toSeq) map { broker =>
-              Stream.eval(fetchMetadata(broker, MetadataRequest(Vector.empty))).attempt.flatMap { r => Stream.emits(r.right.toOption.toSeq) }
-            }
-          ) take 1 runLast) flatMap {
-            case Some(meta) => signal.modify(updateClientState(meta)) as (())
-            case None => F.fail(NoBrokerAvailable)
-          }
-        }
-    }
-
-    /**
-      * Update client state with metadata from the response. Only updates metadata in response,
-      * other values and state of brokers that already exists are preserved.
-      */
-    def updateClientState[F[_]](mr: MetadataResponse)(s: ClientState): ClientState = {
-      val newBrokers =
-        mr.brokers.map { broker =>
-          broker.nodeId ->
-            BrokerData(
-              brokerId = broker.nodeId
-              , address = BrokerAddress(broker.host, broker.port)
-            )
-        } toMap
-
-      val newTopics = mr.topics.flatMap { tm =>
-        tm.partitions.map { pm =>
-          (tm.name, pm.id) -> TopicAndPartitionState(tm.name, pm.id, pm.leader, pm.isr)
-        }
-      } toMap
-
-      ClientState(
-        brokers = s.brokers ++ newBrokers
-        , topics = s.topics ++ newTopics
-      )
-    }
-
 
     /**
       * Queries all supplied seeds for first leader and then returns that leader. Returns None if no seed replied with leader for that partition
@@ -467,51 +414,6 @@ object KafkaClient {
 
 
 
-
-    /**
-      * Performs refresh of the metadata for supplied topic and updates state.
-      * Used when metadata for given topic // partition seems to be not up-to date (i.e. leader changed)
-      * @param brokerConnection  A function to individual broker for metadata
-      * @param stateSignal       State signal to get initial broker list from and then update with state of that broker
-      * @param topicId           Id of the topic
-      * @return updated client state
-      */
-    def refreshMetadata[F[_]](
-     brokerConnection: (BrokerAddress, MetadataRequest) => F[MetadataResponse]
-     , stateSignal: mutable.Signal[F, ClientState]
-    )(
-      topicId: String @@ TopicName
-    )(implicit F: Effect[F]): F[ClientState] = {
-      def go(remains: Seq[BrokerData]): F[ClientState] = {
-        remains.headOption match {
-          case None => F.fail(NoBrokerAvailable)
-          case Some(broker) =>
-            brokerConnection(broker.address, MetadataRequest(Vector(topicId))).attempt flatMap {
-              case Right(resp) =>
-                println(s"META FROM $broker : $resp")
-                stateSignal.modify(updateClientState(resp)).map(_.now)
-              case Left(err) =>
-                println(s"NO META FROM: $broker: $err")
-                go(remains.tail)
-
-            }
-        }
-      }
-      stateSignal.get.map { _.brokers.values.toSeq } flatMap go
-    }
-
-    /** like refreshMetadata, but continuous with interval. This will also never fail, even when brokers are not available for whatever reason.  **/
-    def refreshMetronome[F[_]](
-      brokerConnection: (BrokerAddress, MetadataRequest) => F[MetadataResponse]
-      , stateSignal: mutable.Signal[F, ClientState]
-      , interval: FiniteDuration
-    )(
-      topicId: String @@ TopicName
-    )(implicit F: Async[F], S: Scheduler): Stream[F, Unit] = {
-      time.awakeEvery(interval) evalMap { _ =>
-        refreshMetadata(brokerConnection, stateSignal)(topicId).attempt as (())
-      }
-    }
 
 
     val consumerBrokerId = tag[Broker](-1)
@@ -577,7 +479,7 @@ object KafkaClient {
       Stream.eval(Async.refOf[F, Option[MetadataRequest]](None)) flatMap { requestRef =>
       (s.evalMap(mrq => requestRef.modify(_ => Some(mrq)) as mrq).zipWithIndex map { case (request, idx) =>
         RequestMessage(version, idx, clientId, request)
-      } through brokerConnection(address)) flatMap { resp => println(s"XXX GOT $resp"); resp.response match {
+      } through brokerConnection(address)) flatMap { resp => resp.response match {
         case meta: MetadataResponse => Stream.emit(meta)
         case other =>
           Stream.eval(requestRef.get) flatMap {
@@ -843,6 +745,8 @@ object KafkaClient {
         def registerMessage(in: (ProduceRequest, Attempt[Response] => F[Unit]), idx: Int): F[RequestMessage] = {
           val (produce, cb) = in
 
+          println(s"XXXG RECEEIVED TO PRODUCE: $produce")
+
           val msg = RequestMessage(
             version = protocol
             , correlationId = idx
@@ -905,8 +809,16 @@ object KafkaClient {
         // this will terminate with leader address
         def leaderUnavailable: Stream[F, BrokerAddress] = {
           L.error2(s"Leader unavailable for publishing to $topicId[$partition]") >> {
-            (queue.dequeue.evalMap { case (_, cb) => cb(Left(LeaderNotAvailable(topicId, partition))) } drain) mergeHaltBoth
-            (time.awakeEvery(getLeaderDelay) >> getLeader) collectFirst { case Some(leader) => leader }
+            Stream.eval(async.signalOf[F, Option[BrokerAddress]](None)) flatMap { leaderSignal =>
+              val cancelIncoming = queue.dequeue.evalMap { case (_, cb) => cb(Left(LeaderNotAvailable(topicId, partition))) } drain
+              val queryLeader = ((time.awakeEvery(getLeaderDelay) >> getLeader) evalMap { r => leaderSignal.modify { _ => r } }) drain
+
+              ((cancelIncoming mergeHaltBoth queryLeader) interruptWhen (leaderSignal map { _.nonEmpty })) ++
+              (leaderSignal.discrete.take(1) flatMap {
+                case None => leaderUnavailable // impossible
+                case Some(leader) => L.debug2(s"Publisher got leader for $topicId[$partition]: $leader")  >> Stream.emit(leader)
+              })
+            }
           }
         }
 
@@ -924,7 +836,7 @@ object KafkaClient {
                 case Some(failedBrokerAddress) if leader == failedBrokerAddress =>
                   // this indicates that cluster sill thinks the leader is same as the one that failed us, for that reason
                   // we have to suspend execution for while and retry in FiniteDuration
-                  L.warn2(s"New elected leader is same like the old one, awaiting next leader: $topicId[$partition]") >>
+                  L.warn2(s"New elected leader is same like the old one ($leader), awaiting next leader: $topicId[$partition], currently unavailable") >>
                   leaderUnavailable flatMap { leader => runner(None, Stream(Some(leader))) }
 
                 case _ =>
@@ -945,14 +857,16 @@ object KafkaClient {
         new PartitionPublishConnection[F] {
 
           def run: F[Unit] =
-            L.warn(s"Starting publish connection for $topicId[$partition]") >>
-            (runner(None, getLeader) interruptWhen termSignal).run.attempt flatMap { r => completeNotProcessed(r.left.toOption.getOrElse(ClientTerminated)) }
+            L.info(s"Starting publish connection for $topicId[$partition]") >>
+            (runner(None, getLeader) interruptWhen termSignal).run.attempt flatMap { r =>
+              completeNotProcessed(r.left.toOption.getOrElse(ClientTerminated)) >>
+              L.info(s"Publish connection for $topicId[$partition] terminated: $r")
+            }
 
           def shutdown: F[Unit] =
-            L.warn(s"Shutting-down publish connection for $topicId[$partition]") >> termSignal.set(true)
+            L.info(s"Shutting-down publish connection for $topicId[$partition]") >> termSignal.set(true)
 
           def publish(messages: Vector[Message], timeout: FiniteDuration, acks: RequiredAcks.Value): F[Option[(Long @@ Offset, Option[Date])]] = {
-            println(s"ABOUT TO PUBLISH: $topicId[$partition] : $messages")
             F.ref[Attempt[Response]] flatMap { cbRef =>
               val request = ProduceRequest(
                 requiredAcks = acks
@@ -961,8 +875,8 @@ object KafkaClient {
               )
 
               queue.enqueue1((request, cbRef.setPure)) >> cbRef.get flatMap {
-                case Left(err) => println(s"PUB FAILED OF $topicId[$partition] : $messages");  F.fail(err)
-                case Right(r) => println(s"pub ok of $topicId[$partition] : $messages");  F.pure(r)
+                case Left(err) => F.fail(err)
+                case Right(r) => F.pure(r)
               }
 
             }
@@ -1013,11 +927,9 @@ object KafkaClient {
                   if (c.previous.shutdown) {
                     F.fail(ClientTerminated)
                   } else if (c.modified) {
-                    F.delay(println(s">>>> PPC ADDED $topic[$partition]: $c")) >>
                     // we have won the race, so we shall start the publisher and then publish
                     F.start(ppc.run) >> publish(topic, partition, data, timeout, acks)
                   } else  {
-                    F.delay(println(s">>> PPC REMOVED $topic[$partition]: $c")) >>
                     // someone else won the ppc, we shall publish to new publisher.
                     publish(topic, partition, data, timeout, acks)
                   }
@@ -1065,7 +977,7 @@ object KafkaClient {
       }
 
       def go(remains: Seq[BrokerAddress], success: Boolean): Stream[F, Map[(String @@ TopicName, Int @@ PartitionId), BrokerAddress]] = {
-        println(s"XXX REMAINS: $remains")
+        println(s"XXX REMIANS FOR BROKER META SIGNAL: $remains")
         remains.headOption match {
           case None =>
             if (success) go(seed, success = false)
@@ -1077,7 +989,6 @@ object KafkaClient {
               Stream.eval(requestQ.enqueue1(metaRq)) >>
                 (requestQ.dequeue through metaRequestConnection(broker)) flatMap { response =>
                   // we will here process the brokers and topics, and schedule next request after a given timeout
-                  println(s"GOT RESPONSE META: $response to $metaRq")
                   Stream.eval_(successRef.modify(_ => true)) ++
                   Stream.emit(buildMap(response)) ++
                   time.sleep_(delay) ++

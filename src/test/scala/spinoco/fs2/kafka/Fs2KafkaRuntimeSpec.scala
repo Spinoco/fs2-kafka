@@ -8,7 +8,7 @@ import org.scalatest.{Args, Status}
 import scodec.bits.ByteVector
 import shapeless.tag
 import shapeless.tag.@@
-import spinoco.fs2.kafka.state.BrokerAddress
+import spinoco.fs2.kafka.network.BrokerAddress
 import spinoco.protocol.kafka.{Broker, PartitionId, ProtocolVersion, TopicName}
 
 import scala.sys.process.Process
@@ -63,6 +63,8 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   val localBroker2_9192 = BrokerAddress(thisLocalHost.getHostAddress, 9192)
   val localBroker3_9292 = BrokerAddress(thisLocalHost.getHostAddress, 9292)
 
+  val localCluster = Set(localBroker1_9092, localBroker2_9192, localBroker3_9292)
+
   implicit lazy val logger: Logger[Task] = new Logger[Task] {
     def log(level: Logger.Level.Value, msg: => String, throwable: Throwable): Task[Unit] =
       Task.delay { println(s"LOGGER: $level: $msg"); if (throwable != null) throwable.printStackTrace() }
@@ -76,9 +78,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
     */
   def startZk(port:Int = DefaultZkPort):Task[String @@ DockerId] = {
     for {
-      _ <- Task.delay { println(s"DOCKER INIT ZK @$port") }
       _ <- dockerVersion.flatMap(_.fold[Task[String]](Task.fail(new Throwable("Docker is not available")))(Task.now))
-      _ <- availableImages map { avail => println(s"DOCKER HAS CURRENT $avail IMAGES RUNNING") }
       _ <- installImageWhenNeeded(ZookeeperImage)
       _ <- Task.delay { println(s"STARTING ZK @$port") }
       runId <- runImage(ZookeeperImage,None)(
@@ -163,7 +163,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
       time.sleep(1.second) >>
       Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
       KafkaClient(Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
-        (awaitLeaderAvailable(kc, testTopicA, part0) onError { err => println(s"FAILED TO WAIT TILL LEADER : $err"); Stream.fail(err)  } ).drain ++ f(kc)
+        awaitLeaderAvailable(kc, testTopicA, part0).drain ++ f(kc)
       }
     }
   }
@@ -291,11 +291,11 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
 
   def awaitLeaderAvailable(client: KafkaClient[Task], topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[Task, BrokerAddress] = {
-    client.leaderFor(500.millis)(topic).map { x => println(s"FROM THE META MONITOR: $x"); x }.map(_.get((topic, partition))).unNone.take(1)
+    client.leaderFor(500.millis)(topic).map(_.get((topic, partition))).unNone.take(1)
   }
 
   def awaitNewLeaderAvailable(client: KafkaClient[Task], topic: String @@ TopicName, partition: Int @@ PartitionId, previous: BrokerAddress): Stream[Task, BrokerAddress] = {
-    client.leaderFor(500.millis)(topic).map { x => println(s"FROM THE META MONITOR: $x"); x }.map(_.get((topic, partition)).filterNot(_ == previous)).unNone.take(1)
+    client.leaderFor(500.millis)(topic).map(_.get((topic, partition)).filterNot(_ == previous)).unNone.take(1)
   }
 
    override def runTest(testName: String, args: Args): Status = {

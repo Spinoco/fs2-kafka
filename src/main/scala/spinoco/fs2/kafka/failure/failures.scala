@@ -2,7 +2,7 @@ package spinoco.fs2.kafka.failure
 
 
 import shapeless.tag.@@
-import spinoco.fs2.kafka.state.BrokerAddress
+import spinoco.fs2.kafka.network.BrokerAddress
 import spinoco.protocol.kafka._
 
 /**
