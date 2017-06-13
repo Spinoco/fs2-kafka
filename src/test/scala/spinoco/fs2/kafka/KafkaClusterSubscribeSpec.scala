@@ -71,7 +71,7 @@ class KafkaClusterSubscribeSpec extends Fs2KafkaRuntimeSpec {
             , time.sleep(5.seconds) >>
               killLeader(kc, nodes, testTopicA, part0)
 
-            , time.sleep(10.seconds) >> 
+            , time.sleep(10.seconds) >>
               awaitNewLeaderAvailable(kc, testTopicA, part0, leader) >>
               time.sleep(3.seconds) >>
               Stream.eval_(publishNMessages(kc, 20, 30, quorum = true))
