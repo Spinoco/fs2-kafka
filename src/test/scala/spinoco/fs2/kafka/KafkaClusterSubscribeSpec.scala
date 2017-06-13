@@ -15,7 +15,7 @@ class KafkaClusterSubscribeSpec extends Fs2KafkaRuntimeSpec {
 
 
   s"cluster" - {
-/*
+
     "subscribe-at-zero" in skipFor(
       KafkaRuntimeRelease.V_0_9_0_1 -> ProtocolVersion.Kafka_0_8
       , KafkaRuntimeRelease.V_0_9_0_1 -> ProtocolVersion.Kafka_0_9
@@ -54,7 +54,7 @@ class KafkaClusterSubscribeSpec extends Fs2KafkaRuntimeSpec {
 
     }
 
-*/
+
     "recovers from leader-failure" in skipFor(
       KafkaRuntimeRelease.V_0_9_0_1 -> ProtocolVersion.Kafka_0_8
       , KafkaRuntimeRelease.V_0_9_0_1 -> ProtocolVersion.Kafka_0_9
@@ -68,20 +68,15 @@ class KafkaClusterSubscribeSpec extends Fs2KafkaRuntimeSpec {
           Stream.eval(publishNMessages(kc, 0, 20, quorum = true)) >>
           concurrent.join(Int.MaxValue)(Stream(
             kc.subscribe(testTopicA, part0, HeadOffset)
-            , time.sleep(10.seconds) >>
-              Stream.eval(Task.delay(println("XXXR KILLING LEADER"))) >>
+            , time.sleep(5.seconds) >>
               killLeader(kc, nodes, testTopicA, part0)
 
-            , time.sleep(30.seconds) >>
-              Stream.eval(Task.delay(println("XXXR  AWAITING LEADER"))) >>
+            , time.sleep(10.seconds) >> 
               awaitNewLeaderAvailable(kc, testTopicA, part0, leader) >>
-              Stream.eval(Task.delay(println("XXXR  AWAITING PUBLISH2"))) >>
-              time.sleep(10.seconds) >>
-              Stream.eval(Task.delay(println("XXXR PUBLISH2"))) >>
-              Stream.eval_(publishNMessages(kc, 20, 30, quorum = true)) >>
-              Stream.eval_(Task.delay(println("XXXR PUBLISH2 DONE")))
+              time.sleep(3.seconds) >>
+              Stream.eval_(publishNMessages(kc, 20, 30, quorum = true))
           ))
-        }} map { x => println(s"XXXY >>> $x"); x} take 30
+        }} take 30
       } runLog ) unsafeTimed 180.seconds unsafeRun).map { _.copy(tail = offset(30)) } shouldBe generateTopicMessages(0, 30, 30)
 
 

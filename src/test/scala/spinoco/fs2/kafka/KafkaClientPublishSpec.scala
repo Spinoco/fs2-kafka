@@ -104,7 +104,7 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
 
       ((withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
-        ((kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_))) take 100) onFinalize { Task.delay { println("SUB DONE")} }
+        ((kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_))) take 100)
       } runLog ) unsafeTimed 30.seconds unsafeRun) shouldBe
         (for { idx <- 0 until 10} yield Left(offset(idx*10))).toVector ++
           (for { idx <- 0 until 100} yield Right(TopicMessage(offset(idx), ByteVector(idx % 10), ByteVector(idx / 10), offset(100)))).toVector

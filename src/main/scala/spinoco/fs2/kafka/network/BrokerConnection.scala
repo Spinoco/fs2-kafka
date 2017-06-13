@@ -88,7 +88,6 @@ object BrokerConnection {
         }
       }
        .flatMap { rm =>
-         println(s"XXXY >>> : $rm")
          MessageCodec.requestCodec.encode(rm).fold(
            err => fail(new Throwable(s"Failed to serialize message: $err : $rm"))
            , data => eval(sendOne(Chunk.bytes(data.toByteArray)))
@@ -191,7 +190,7 @@ object BrokerConnection {
             }
           }
         }
-      } map { x => println(s"XXXY <<<< $x"); x}
+      }
     }
 
   }

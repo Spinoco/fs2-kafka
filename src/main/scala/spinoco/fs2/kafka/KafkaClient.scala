@@ -745,8 +745,6 @@ object KafkaClient {
         def registerMessage(in: (ProduceRequest, Attempt[Response] => F[Unit]), idx: Int): F[RequestMessage] = {
           val (produce, cb) = in
 
-          println(s"XXXG RECEEIVED TO PRODUCE: $produce")
-
           val msg = RequestMessage(
             version = protocol
             , correlationId = idx
@@ -977,7 +975,6 @@ object KafkaClient {
       }
 
       def go(remains: Seq[BrokerAddress], success: Boolean): Stream[F, Map[(String @@ TopicName, Int @@ PartitionId), BrokerAddress]] = {
-        println(s"XXX REMIANS FOR BROKER META SIGNAL: $remains")
         remains.headOption match {
           case None =>
             if (success) go(seed, success = false)
