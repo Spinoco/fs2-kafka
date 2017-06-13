@@ -12,34 +12,34 @@ Thanks to fs2, it comes with full backpressure and streaming support out of the 
 
 The fs2-kafka was build with minimal depenedencies (apart from fs2 only scodec and shapeless is used). 
 
-fs2-kafka only support subset of features compare to native kafka client. There is for example no support for creating/adminsitering topics and partitions, or for Kafka Connect / Kafka Streams. Reasons for it is that we wanted client to be as simple as possible leaving all non-essesntial functionality to other solutions. 
+fs2-kafka only support subset of features compare to native kafka client. There is for example no support for creating/adminsitering topics and partitions, or for Kafka Connect / Kafka Streams. Reasons for it is that we wanted client to be as simple as possible leaving all non-essential functionality to other solutions. Please note there is also no support for SASL Kafka protocol now. 
 
 
 
 ## Features
 
-- Subscribe to topic / parition, with confiugrable pre-fetch behaviour.
+- Subscribe to topic / parition, with configurable pre-fetch behaviour.
 - Publish to topic / partition 
 - Query metadata from kafka cluster
 - Query offset range for topic / partition 
 
 For the compression of messages fs2-kafka supports GZIP and Snappy compression. 
 
-fs2-kafka supports versions since 0.8.2 until 0.10.2 of kafka cluster with protocols. The protocols are cross-tested against the different versions of kafka (i.e. 0.10.2 is tested to wrok ok with 0.8.2, 0.9.x, 0.10, 0.10.1 and 0.10.2 protocols). 
+fs2-kafka supports versions since 0.8.2 until 0.10.2 of kafka cluster with respective protocols. The protocols are cross-tested against the different versions of Kafka (i.e. 0.10.2 is tested to wrok ok with 0.8.2, 0.9.1, 0.10, 0.10.1 and 0.10.2 protocols). 
 
 ## SBT
 
 Add this to your build file
 
 ```
-libraryDependencies += "com.spinoco" %% "fs2-kafka" % "0.1.0" 
+libraryDependencies += "com.spinoco" %% "fs2-kafka" % "0.1.1" 
 ```
 
 ## Dependencies
 
 version  |    scala  |   fs2  |  scodec | shapeless      
 ---------|-----------|--------|---------|-----------
-0.1.1    | 2.11, 2.12| 0.9.7  | 1.10.3  | 2.3.2 
+0.1.1    | 2.11, 2.12|  0.9.7 | 1.10.3  | 2.3.2 
 
 
 ## Usage 
@@ -69,14 +69,14 @@ kafka.client(
   , clientName = "my-client-name"
 ) flatMap { kafkaClient =>
   /* your code using Kafka Client **/
-  ???
+  ???.asInstanceOf[Stream[F, A]]
 }
 
 ```
 
-Note that resulting type of this program is Stream[F, ???], that means stream needs to be run, and once it finishes the kafka client will terminate. 
+Note that resulting type of this program is `Stream[F, A]` that means stream needs to be run, and once it finishes the kafka client will terminate. 
 
-The `protocol` parameter allows to specify exact protocol to be used with ensemble, to make production migrations and upgrades easy. 
+The `protocol` parameter allows to specify explicitly protocol to be used with Kafka ensemble, to make production migrations and upgrades easy. 
 
 
 ### Publishing to topics
