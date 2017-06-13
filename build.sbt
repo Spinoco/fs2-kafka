@@ -28,17 +28,13 @@ lazy val commonSettings = Seq(
    libraryDependencies ++= Seq(
       "org.scalatest" %% "scalatest" % "3.0.0" % "test"
       , "org.scalacheck" %% "scalacheck" % "1.13.4" % "test"
-
-     // , "ch.qos.logback" % "logback-classic" % "1.1.7"
-     // , "org.slf4j" % "slf4j-simple" % "1.6.1" % "test" // uncomment this for logs when testing
-
       , "co.fs2" %% "fs2-core" % "0.9.7"
       , "co.fs2" %% "fs2-io" % "0.9.7"
 
       , "com.spinoco" %% "protocol-kafka" % "0.2.0"
 
    ),
-   scmInfo := Some(ScmInfo(url("https://github.com/Spinoco/fs2-zk"), "git@github.com:Spinoco/fs2-kafka.git")),
+   scmInfo := Some(ScmInfo(url("https://github.com/Spinoco/fs2-kafka"), "git@github.com:Spinoco/fs2-kafka.git")),
    homepage := None,
    licenses += ("MIT", url("http://opensource.org/licenses/MIT")),
    initialCommands := s"""
