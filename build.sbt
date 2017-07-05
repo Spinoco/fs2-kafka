@@ -31,7 +31,7 @@ lazy val commonSettings = Seq(
       , "co.fs2" %% "fs2-core" % "0.9.7"
       , "co.fs2" %% "fs2-io" % "0.9.7"
 
-      , "com.spinoco" %% "protocol-kafka" % "0.2.0"
+      , "com.spinoco" %% "protocol-kafka" % "0.2.1"
 
    ),
    scmInfo := Some(ScmInfo(url("https://github.com/Spinoco/fs2-kafka"), "git@github.com:Spinoco/fs2-kafka.git")),
