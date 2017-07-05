@@ -32,14 +32,14 @@ fs2-kafka supports versions between 0.8.2 and 0.10.2 of kafka cluster with respe
 Add this to your build file
 
 ```
-libraryDependencies += "com.spinoco" %% "fs2-kafka" % "0.1.1" 
+libraryDependencies += "com.spinoco" %% "fs2-kafka" % "0.1.2" 
 ```
 
 ## Dependencies
 
 version  |    scala  |   fs2  |  scodec | shapeless      
 ---------|-----------|--------|---------|-----------
-0.1.1    | 2.11, 2.12|  0.9.7 | 1.10.3  | 2.3.2 
+0.1.2    | 2.11, 2.12|  0.9.7 | 1.10.3  | 2.3.2 
 
 
 ## Usage 
