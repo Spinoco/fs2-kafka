@@ -2,7 +2,7 @@ package spinoco.fs2.kafka.network
 
 import java.net.InetSocketAddress
 
-import fs2.util.Effect
+import cats.effect.Sync
 
 
 /**
@@ -15,8 +15,8 @@ case class BrokerAddress(
   , port: Int
 )  { self =>
 
-  def toInetSocketAddress[F[_]](implicit F: Effect[F]): F[InetSocketAddress] =
-    F.delay { new InetSocketAddress(self.host, self.port) }
+  def toInetSocketAddress[F[_]](implicit F: Sync[F]): F[InetSocketAddress] =
+    F.catchNonFatal { new InetSocketAddress(self.host, self.port) }
 
 }
 

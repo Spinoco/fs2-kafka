@@ -2,8 +2,8 @@ package spinoco.fs2.kafka
 
 import java.util.logging.LogRecord
 
+import cats.effect.Sync
 import fs2._
-import fs2.util.Async
 import spinoco.fs2.kafka.Logger.Level
 
 /**
@@ -40,7 +40,7 @@ object Logger {
   }
 
 
-  def JDKLogger[F[_]](jdkLogger:java.util.logging.Logger)(implicit F: Async[F]):F[Logger[F]] = F.delay {
+  def JDKLogger[F[_]](jdkLogger:java.util.logging.Logger)(implicit F: Sync[F]):F[Logger[F]] = F.delay {
     new Logger[F] {
       def log(level: Logger.Level.Value, msg: => String, throwable: Throwable): F[Unit] = F.delay {
         val jdkLevel =

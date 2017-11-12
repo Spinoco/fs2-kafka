@@ -2,24 +2,25 @@ package spinoco.fs2.kafka.network
 
 import java.net.InetSocketAddress
 import java.nio.channels.AsynchronousChannelGroup
-import java.util.concurrent.ThreadFactory
+import java.util.concurrent.{Executors, ThreadFactory}
 import java.util.concurrent.atomic.AtomicInteger
 
 import fs2._
-import fs2.Stream
+import cats.effect.IO
 import scodec.bits.ByteVector
 import shapeless.tag
 import spinoco.protocol.kafka.Request.RequiredAcks
 import spinoco.protocol.kafka._
 
+import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 
 /**
   * Created by pach on 28/08/16.
   */
 object BrokerConnectionApp extends App {
-  implicit val S = Strategy.fromFixedDaemonPool(10)
-  implicit val SCh = Scheduler.fromFixedDaemonPool(10)
+  implicit val EC: ExecutionContext = ExecutionContext.global
+  implicit val S = Scheduler.fromScheduledExecutorService(Executors.newScheduledThreadPool(10))
   implicit val AG = AsynchronousChannelGroup.withFixedThreadPool(10, new ThreadFactory{
     val idx = new AtomicInteger(0)
     override def newThread(r: Runnable): Thread = {
@@ -31,27 +32,27 @@ object BrokerConnectionApp extends App {
 
   def metadata = {
     val source =
-      Stream[Task, RequestMessage](
+      Stream[RequestMessage](
         RequestMessage(
           version = ProtocolVersion.Kafka_0_8
           , correlationId = 1
           , clientId = "manager"
           , request = Request.MetadataRequest(Vector.empty)
         )
-      ) ++ time.sleep_[Task](10.seconds)
+      ) ++ S.sleep_[IO](10.seconds)
 
     source.through(BrokerConnection(
       address = new InetSocketAddress("127.0.0.1", 9092)
     ))
-      .evalMap(rcv => Task.delay {
-        println(rcv)
-      })
-      .run.unsafeRun()
+    .evalMap(rcv => IO {
+      println(rcv)
+    })
+    .run.unsafeRunSync()
   }
 
   def publish = {
     val source =
-      Stream[Task, RequestMessage](
+      Stream[RequestMessage](
         RequestMessage(
           version = ProtocolVersion.Kafka_0_8
           , correlationId = 2
@@ -68,21 +69,21 @@ object BrokerConnectionApp extends App {
             )
           )
         )
-      ) ++ time.sleep_[Task](10.seconds)
+      ) ++ S.sleep_[IO](10.seconds)
 
     source.through(BrokerConnection(
       address = new InetSocketAddress("127.0.0.1", 9092)
     ))
-      .evalMap(rcv => Task.delay {
-        println(rcv)
-      })
-      .run.unsafeRun()
+    .evalMap(rcv => IO {
+      println(rcv)
+    })
+    .run.unsafeRunSync()
 
   }
 
   def fetch = {
     val source =
-      Stream[Task, RequestMessage](
+      Stream[RequestMessage](
         RequestMessage(
           version = ProtocolVersion.Kafka_0_8
           , correlationId = 2
@@ -97,15 +98,15 @@ object BrokerConnectionApp extends App {
             )))
           )
         )
-      ) ++ time.sleep_[Task](10.seconds)
+      ) ++ S.sleep_[IO](10.seconds)
 
     source.through(BrokerConnection(
       address = new InetSocketAddress("127.0.0.1", 9092)
     ))
-      .evalMap(rcv => Task.delay {
-        println(rcv)
-      })
-      .run.unsafeRun()
+    .evalMap(rcv => IO {
+      println(rcv)
+    })
+    .run.unsafeRunSync()
   }
 
   //metadata

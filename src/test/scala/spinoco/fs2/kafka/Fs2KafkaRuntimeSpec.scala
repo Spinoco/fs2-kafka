@@ -2,8 +2,10 @@ package spinoco.fs2.kafka
 
 import java.net.InetAddress
 
+import cats.effect.IO
+import cats.syntax.all._
+
 import fs2._
-import fs2.util.syntax._
 import org.scalatest.{Args, Status}
 import scodec.bits.ByteVector
 import shapeless.tag
@@ -65,9 +67,9 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   val localCluster = Set(localBroker1_9092, localBroker2_9192, localBroker3_9292)
 
-  implicit lazy val logger: Logger[Task] = new Logger[Task] {
-    def log(level: Logger.Level.Value, msg: => String, throwable: Throwable): Task[Unit] =
-      Task.delay { println(s"LOGGER: $level: $msg"); if (throwable != null) throwable.printStackTrace() }
+  implicit lazy val logger: Logger[IO] = new Logger[IO] {
+    def log(level: Logger.Level.Value, msg: => String, throwable: Throwable): IO[Unit] =
+      IO { println(s"LOGGER: $level: $msg"); if (throwable != null) throwable.printStackTrace() }
   }
 
 
@@ -76,11 +78,11 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
     * Starts zookeeper listening on given port. ZK runs on host network.
     * @return
     */
-  def startZk(port:Int = DefaultZkPort):Task[String @@ DockerId] = {
+  def startZk(port:Int = DefaultZkPort):IO[String @@ DockerId] = {
     for {
-      _ <- dockerVersion.flatMap(_.fold[Task[String]](Task.fail(new Throwable("Docker is not available")))(Task.now))
+      _ <- dockerVersion.flatMap(_.fold[IO[String]](IO.raiseError(new Throwable("Docker is not available")))(IO.pure))
       _ <- installImageWhenNeeded(ZookeeperImage)
-      _ <- Task.delay { println(s"STARTING ZK @$port") }
+      _ <- IO { println(s"STARTING ZK @$port") }
       runId <- runImage(ZookeeperImage,None)(
         "--restart=no"
         , "--net=fs2-kafka-network"
@@ -92,21 +94,21 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
 
   /** stops and cleans the given image **/
-  def stopImage(zkImageId: String @@ DockerId):Task[Unit] = {
+  def stopImage(zkImageId: String @@ DockerId):IO[Unit] = {
     runningImages flatMap { allRunning =>
-      if (allRunning.exists(zkImageId.startsWith)) killImage(zkImageId) >> cleanImage(zkImageId)
+      if (allRunning.exists(zkImageId.startsWith)) killImage(zkImageId) *> cleanImage(zkImageId)
       else availableImages flatMap { allAvailable =>
         if (allAvailable.exists(zkImageId.startsWith)) cleanImage(zkImageId)
-        else Task.now(())
+        else IO.pure(())
       }
     }
 
   }
 
   /** starts kafka. Kafka runs in host network **/
-  def startKafka(image: String, port: Int, zkPort: Int = DefaultZkPort, brokerId: Int = 1): Task[String @@ DockerId] = {
+  def startKafka(image: String, port: Int, zkPort: Int = DefaultZkPort, brokerId: Int = 1): IO[String @@ DockerId] = {
     for {
-      _ <- dockerVersion.flatMap(_.fold[Task[String]](Task.fail(new Throwable("Docker is not available")))(Task.now))
+      _ <- dockerVersion.flatMap(_.fold[IO[String]](IO.raiseError(new Throwable("Docker is not available")))(IO.pure))
       _ <- installImageWhenNeeded(image)
       params = Seq(
         "--restart=no"
@@ -120,7 +122,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
         , s"-p $port:$port/tcp"
 
       )
-      - <- Task.delay { println(s"STARTING BROKER[$brokerId] @$port") }
+      - <- IO { println(s"STARTING BROKER[$brokerId] @$port") }
       runId <- runImage(image,None)(params :_*)
     } yield runId
   }
@@ -132,7 +134,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
    , name: String @@ TopicName
    , partitionCount: Int = 1
    , replicas: Int = 1
- ):Task[Unit] = Task.delay {
+ ):IO[Unit] = IO {
     Process("docker", Seq(
       "exec", "-i"
       , kafkaDockerId
@@ -143,32 +145,32 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
 
   /** process emitting once docker id of zk and kafka in singleton (one node) **/
-  def withKafkaSingleton[A](version: KafkaRuntimeRelease.Value)(f: (String @@ DockerId, String @@ DockerId) => Stream[Task, A]):Stream[Task,A] = {
-    Stream.eval(createNetwork("fs2-kafka-network")) >>
+  def withKafkaSingleton[A](version: KafkaRuntimeRelease.Value)(f: (String @@ DockerId, String @@ DockerId) => Stream[IO, A]):Stream[IO,A] = {
+    Stream.eval(createNetwork("fs2-kafka-network")) *>
     Stream.eval(startZk()).flatMap { zkId =>
-    awaitZKStarted(zkId) ++ time.sleep_(2.seconds) ++
+    awaitZKStarted(zkId) ++ S.sleep_[IO](2.seconds) ++
     Stream.eval(startK(version, 1)).flatMap { kafkaId =>
       (awaitKStarted(version, kafkaId) ++ f(zkId, kafkaId))
       .onFinalize {
-        stopImage(kafkaId) >>
-        stopImage(zkId) >>
+        stopImage(kafkaId) *>
+        stopImage(zkId) *>
         removeNetwork("fs2-kafka-network")
       }
     }}
 
   }
 
-  def withKafkaClient[A](version: KafkaRuntimeRelease.Value, protocol: ProtocolVersion.Value)(f: KafkaClient[Task] => Stream[Task, A]): Stream[Task, A] = {
+  def withKafkaClient[A](version: KafkaRuntimeRelease.Value, protocol: ProtocolVersion.Value)(f: KafkaClient[IO] => Stream[IO, A]): Stream[IO, A] = {
     withKafkaSingleton(version) { (_, kafkaDockerId) =>
-      time.sleep(1.second) >>
-      Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
-      KafkaClient(Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
+      S.sleep[IO](1.second) *>
+      Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) *>
+      KafkaClient[IO](Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
         awaitLeaderAvailable(kc, testTopicA, part0).drain ++ f(kc)
       }
     }
   }
 
-  def startK(version: KafkaRuntimeRelease.Value, brokerId: Int):Task[String @@ DockerId] = {
+  def startK(version: KafkaRuntimeRelease.Value, brokerId: Int):IO[String @@ DockerId] = {
     val port = 9092+ 100*(brokerId -1)
     version match {
       case KafkaRuntimeRelease.V_8_2_0 => startKafka(Kafka8Image, port = port, brokerId = brokerId)
@@ -179,13 +181,13 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
     }
   }
 
-  def awaitZKStarted(zkId: String @@ DockerId):Stream[Task,Nothing] = {
+  def awaitZKStarted(zkId: String @@ DockerId):Stream[IO,Nothing] = {
     followImageLog(zkId).takeWhile(! _.contains("binding to port")).drain ++
-    Stream.eval_(Task.delay(println(s"Zookeeper started at $zkId")))
+    Stream.eval_(IO(println(s"Zookeeper started at $zkId")))
   }
 
-  def awaitKStarted(version: KafkaRuntimeRelease.Value, kafkaId: String @@ DockerId): Stream[Task, Nothing] = {
-    val output = Stream.eval_(Task.delay(println(s"Broker $version started at $kafkaId")))
+  def awaitKStarted(version: KafkaRuntimeRelease.Value, kafkaId: String @@ DockerId): Stream[IO, Nothing] = {
+    val output = Stream.eval_(IO(println(s"Broker $version started at $kafkaId")))
     version match {
       case KafkaRuntimeRelease.V_8_2_0 =>
         followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
@@ -204,8 +206,8 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
     }
   }
 
-  def awaitKFollowerReady(version: KafkaRuntimeRelease.Value, kafkaId: String @@ DockerId, brokerId: Int): Stream[Task, Nothing] = {
-    val output = Stream.eval_(Task.delay(println(s"Broker $brokerId (follower) $version started at $kafkaId")))
+  def awaitKFollowerReady(version: KafkaRuntimeRelease.Value, kafkaId: String @@ DockerId, brokerId: Int): Stream[IO, Nothing] = {
+    val output = Stream.eval_(IO(println(s"Broker $brokerId (follower) $version started at $kafkaId")))
     version match {
       case KafkaRuntimeRelease.V_8_2_0 =>
         followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
@@ -239,14 +241,14 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   }
 
   /** start 3 node kafka cluster with zookeeper **/
-  def withKafkaCluster(version: KafkaRuntimeRelease.Value): Stream[Task, KafkaNodes] = {
+  def withKafkaCluster(version: KafkaRuntimeRelease.Value): Stream[IO, KafkaNodes] = {
     Stream.eval_(createNetwork("fs2-kafka-network")) ++
     Stream.bracket(startZk())(
       zkId => {
-        awaitZKStarted(zkId) ++ time.sleep_(2.seconds) ++ Stream.bracket(startK(version, 1))(
-          broker1 => awaitKStarted(version, broker1) ++ time.sleep_(2.seconds) ++ Stream.bracket(startK(version, 2))(
-            broker2 => awaitKFollowerReady(version, broker2, 2) ++ time.sleep_(2.seconds) ++ Stream.bracket(startK(version, 3))(
-              broker3 => awaitKFollowerReady(version, broker3, 3) ++ time.sleep_(2.seconds) ++ Stream.emit(KafkaNodes(zkId, Map(tag[Broker](1) -> broker1, tag[Broker](2) -> broker2, tag[Broker](3) -> broker3)))
+        awaitZKStarted(zkId) ++ S.sleep_[IO](2.seconds) ++ Stream.bracket(startK(version, 1))(
+          broker1 => awaitKStarted(version, broker1) ++ S.sleep_[IO](2.seconds) ++ Stream.bracket(startK(version, 2))(
+            broker2 => awaitKFollowerReady(version, broker2, 2) ++ S.sleep_[IO](2.seconds) ++ Stream.bracket(startK(version, 3))(
+              broker3 => awaitKFollowerReady(version, broker3, 3) ++ S.sleep_[IO](2.seconds) ++ Stream.emit(KafkaNodes(zkId, Map(tag[Broker](1) -> broker1, tag[Broker](2) -> broker2, tag[Broker](3) -> broker3)))
               , stopImage
             )
             , stopImage
@@ -260,7 +262,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   }
 
 
-  def publishNMessages(client: KafkaClient[Task],from: Int, to: Int, quorum: Boolean = false): Task[Unit] = {
+  def publishNMessages(client: KafkaClient[IO],from: Int, to: Int, quorum: Boolean = false): IO[Unit] = {
 
     Stream.range(from, to).evalMap { idx =>
       client.publish1(testTopicA, part0, ByteVector(1),  ByteVector(idx), quorum, 10.seconds)
@@ -276,7 +278,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   }
 
 
-  def killLeader(client: KafkaClient[Task], nodes: KafkaNodes, topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[Task, Nothing] = {
+  def killLeader(client: KafkaClient[IO], nodes: KafkaNodes, topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[IO, Nothing] = {
     client.leaderFor(500.millis)(topic).take(1) map { _((topic, partition)) } flatMap { leader =>
       println(s"KILLING LEADER: $leader")
       leader match {
@@ -290,11 +292,11 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
 
 
-  def awaitLeaderAvailable(client: KafkaClient[Task], topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[Task, BrokerAddress] = {
+  def awaitLeaderAvailable(client: KafkaClient[IO], topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[IO, BrokerAddress] = {
     client.leaderFor(500.millis)(topic).map(_.get((topic, partition))).unNone.take(1)
   }
 
-  def awaitNewLeaderAvailable(client: KafkaClient[Task], topic: String @@ TopicName, partition: Int @@ PartitionId, previous: BrokerAddress): Stream[Task, BrokerAddress] = {
+  def awaitNewLeaderAvailable(client: KafkaClient[IO], topic: String @@ TopicName, partition: Int @@ PartitionId, previous: BrokerAddress): Stream[IO, BrokerAddress] = {
     client.leaderFor(500.millis)(topic).map(_.get((topic, partition)).filterNot(_ == previous)).unNone.take(1)
   }
 

@@ -3,6 +3,7 @@ package spinoco.fs2.kafka.network
 import java.net.InetSocketAddress
 import java.util.Date
 
+import cats.effect.IO
 import fs2._
 import scodec.bits.ByteVector
 import shapeless.tag
@@ -35,7 +36,7 @@ class BrokerConnection08SPec extends BrokerConnectionKafkaSpecBase {
               , messages = Vector((testTopic1, Vector((part0, Vector(SingleMessage(0l, MessageVersion.V0, None, ByteVector(1,2,3), ByteVector(5,6,7)))))))
             )
           )
-        ) ++ time.sleep_(1.minute))
+        ) ++ S.sleep_[IO](1.minute))
         .through(BrokerConnection(new InetSocketAddress("127.0.0.1",9092)))
         .take(1).map(Left(_))
 
@@ -51,13 +52,13 @@ class BrokerConnection08SPec extends BrokerConnectionKafkaSpecBase {
               , maxBytes = None
               , topics = Vector((testTopic1, Vector((part0, tag[Offset](0), 10240))))
             )
-          )) ++ time.sleep_(1.minute))
+          )) ++ S.sleep_[IO](1.minute))
           .through(BrokerConnection(new InetSocketAddress("127.0.0.1",9092)))
           .take(1).map(Right(_))
 
 
         createTopic ++ publishOne ++ fetchOne
-      }.runLog.unsafeRun()
+      }.runLog.unsafeRunSync()
 
 
       result shouldBe Vector(
@@ -78,13 +79,13 @@ class BrokerConnection08SPec extends BrokerConnectionKafkaSpecBase {
               , correlationId = 1
               , clientId = "test-subscriber"
               , request = MetadataRequest(Vector())
-            )) ++ time.sleep_(1.minute))
+            )) ++ S.sleep_[IO](1.minute))
               .through(BrokerConnection(new InetSocketAddress("127.0.0.1",9092)))
               .take(1)
 
           createTopic1 ++ createTopic2  ++ fetchMeta
 
-        }.runLog.unsafeRun()
+        }.runLog.unsafeRunSync()
 
       val metaResponse = result.collect { case ResponseMessage(1, meta:MetadataResponse) => meta }
 
@@ -105,13 +106,13 @@ class BrokerConnection08SPec extends BrokerConnectionKafkaSpecBase {
               , correlationId = 1
               , clientId = "test-subscriber"
               , request = OffsetsRequest(tag[Broker](-1), Vector((testTopic1, Vector((partition(0), new Date(-1), Some(10))))))
-            )) ++ time.sleep_(1.minute))
+            )) ++ S.sleep_[IO](1.minute))
               .through(BrokerConnection(new InetSocketAddress("127.0.0.1",9092)))
               .take(1)
 
           createTopic1 ++ fetchOffsets
 
-        }.runLog.unsafeRun()
+        }.runLog.unsafeRunSync()
 
       val offsetResponse = result.collect { case ResponseMessage(1, offset:OffsetResponse) => offset }
 

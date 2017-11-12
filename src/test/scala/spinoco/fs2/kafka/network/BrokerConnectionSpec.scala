@@ -1,5 +1,7 @@
 package spinoco.fs2.kafka.network
 
+import cats.effect.IO
+
 import spinoco.fs2.kafka.Fs2KafkaClientSpec
 import fs2._
 import scodec.bits.ByteVector
@@ -53,44 +55,44 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
 
     "will send and register MetadataRequest" in {
       var send:Vector[ByteVector] = Vector.empty
-      val ref = F.refOf(Map.empty[Int,RequestMessage]).unsafeRun()
+      val ref = async.refOf[IO, Map[Int, RequestMessage]](Map.empty).unsafeRunSync()
       Stream(
         metaRequestMessage
-      ).through(impl.sendMessages(
+      ).covary[IO].through(impl.sendMessages[IO](
         openRequests = ref
-        , sendOne = { (chunk:Chunk[Byte]) => Task.delay{ val bs = chunk.toBytes; send = send :+ ByteVector.view(bs.values).drop(bs.offset).take(bs.size) }}
-      )).run.unsafeRun()
+        , sendOne = { (chunk:Chunk[Byte]) => IO{ val bs = chunk.toBytes; send = send :+ ByteVector.view(bs.values).drop(bs.offset).take(bs.size) }}
+      )).run.unsafeRunSync()
 
       send.size shouldBe 1
-      ref.get.unsafeRun().get(metaRequestMessage.correlationId) shouldBe Some(metaRequestMessage)
+      ref.get.unsafeRunSync().get(metaRequestMessage.correlationId) shouldBe Some(metaRequestMessage)
     }
 
     "will send and register Produce Request " in {
       var send:Vector[ByteVector] = Vector.empty
-      val ref = F.refOf(Map.empty[Int,RequestMessage]).unsafeRun()
+      val ref = async.refOf[IO, Map[Int,RequestMessage]](Map.empty).unsafeRunSync()
       Stream(
         produceRequestMessage
-      ).through(impl.sendMessages(
+      ).covary[IO].through(impl.sendMessages[IO](
         openRequests = ref
-        , sendOne = { (chunk:Chunk[Byte]) => Task.delay{ val bs = chunk.toBytes; send = send :+ ByteVector.view(bs.values).drop(bs.offset).take(bs.size) }}
-      )).run.unsafeRun()
+        , sendOne = { (chunk:Chunk[Byte]) => IO{ val bs = chunk.toBytes; send = send :+ ByteVector.view(bs.values).drop(bs.offset).take(bs.size) }}
+      )).run.unsafeRunSync()
 
       send.size shouldBe 1
-      ref.get.unsafeRun().get(produceRequestMessage.correlationId) shouldBe Some(produceRequestMessage)
+      ref.get.unsafeRunSync().get(produceRequestMessage.correlationId) shouldBe Some(produceRequestMessage)
     }
 
     "will send Produce Request bot won't register if reply is not expected" in {
       var send:Vector[ByteVector] = Vector.empty
-      val ref = F.refOf(Map.empty[Int,RequestMessage]).unsafeRun()
+      val ref = async.refOf[IO, Map[Int,RequestMessage]](Map.empty).unsafeRunSync()
       Stream(
         produceRequestMessage.copy(request = produceRequest.copy(requiredAcks = RequiredAcks.NoResponse))
-      ).through(impl.sendMessages(
+      ).covary[IO].through(impl.sendMessages[IO](
         openRequests = ref
-        , sendOne = { (chunk:Chunk[Byte]) => Task.delay{ val bs = chunk.toBytes; send = send :+ ByteVector.view(bs.values).drop(bs.offset).take(bs.size) }}
-      )).run.unsafeRun()
+        , sendOne = { (chunk:Chunk[Byte]) => IO{ val bs = chunk.toBytes; send = send :+ ByteVector.view(bs.values).drop(bs.offset).take(bs.size) }}
+      )).run.unsafeRunSync()
 
       send.size shouldBe 1
-      ref.get.unsafeRun().get(produceRequestMessage.correlationId) shouldBe None
+      ref.get.unsafeRunSync().get(produceRequestMessage.correlationId) shouldBe None
     }
 
   }
@@ -103,10 +105,10 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
       val source = messages.map { oneMsg =>
         val sizeOfMsg = oneMsg.map(_.size).sum
         val chunks = oneMsg.map(sb => Chunk.bytes(sb.toArray))
-        chunks.foldLeft(Stream.chunk[Task,Byte](Chunk.bytes(ByteVector.fromInt(sizeOfMsg).toArray))) { case (s,next) => s ++ Stream.chunk(next) }
-      }.foldLeft(Stream.empty[Task,Byte])(_ ++ _)
+        chunks.foldLeft(Stream.chunk[Byte](Chunk.bytes(ByteVector.fromInt(sizeOfMsg).toArray))) { case (s,next) => s ++ Stream.chunk(next) }
+      }.foldLeft(Stream.empty:Stream[IO, Byte])(_ ++ _)
 
-      val resultMsg = source.through(impl.receiveChunks).runLog.unsafeRun()
+      val resultMsg = source.through(impl.receiveChunks).runLog.unsafeRunSync()
       val expectedMsg = messages.map { oneMsg =>
         oneMsg.foldLeft(ByteVector.empty){ case (bv, n) => bv ++ ByteVector.view(n.toArray) }
       }
@@ -117,18 +119,18 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
 
     "correctly decodes received message (MetadataResponse)" in {
 
-      val ref = F.refOf(Map.empty[Int,RequestMessage]).unsafeRun()
-      ref.setPure(Map(1 -> metaRequestMessage)).unsafeRun()
+      val ref = async.refOf[IO, Map[Int,RequestMessage]](Map.empty).unsafeRunSync()
+      ref.setSyncPure(Map(1 -> metaRequestMessage)).unsafeRunSync()
 
       val bytes =
       MessageCodec.responseCodecFor(ProtocolVersion.Kafka_0_10,ApiKey.MetadataRequest).encode(metaResponse.response)
       .flatMap(rbv => MessageCodec.responseCorrelationCodec.encode(metaResponse.correlationId -> rbv))
       .getOrElse(fail("Encoding of response failed"))
 
-      val result = Stream(bytes.bytes.drop(4)).through(impl.decodeReceived(ref)).runLog.unsafeRun()
+      val result = Stream(bytes.bytes.drop(4)).covary[IO].through(impl.decodeReceived[IO](ref)).runLog.unsafeRunSync()
 
       result shouldBe Vector(metaResponse)
-      ref.get.unsafeRun() shouldBe Map()
+      ref.get.unsafeRunSync() shouldBe Map()
     }
 
 

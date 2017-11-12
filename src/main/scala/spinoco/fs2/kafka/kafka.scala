@@ -3,13 +3,15 @@ package spinoco.fs2
 
 import java.nio.channels.AsynchronousChannelGroup
 
+import cats.effect.Effect
 import fs2._
-import fs2.util.Async
 import scodec.bits.ByteVector
 import shapeless.tag
 import shapeless.tag._
 import spinoco.fs2.kafka.network.BrokerAddress
 import spinoco.protocol.kafka.{Offset, PartitionId, ProtocolVersion, TopicName}
+
+import scala.concurrent.ExecutionContext
 
 
 package object kafka {
@@ -52,7 +54,7 @@ package object kafka {
     ensemble: Set[BrokerAddress]
     , protocol: ProtocolVersion.Value
     , clientName: String
-  )(implicit AG: AsynchronousChannelGroup, F:Async[F], S: Scheduler, L: Logger[F]):Stream[F,KafkaClient[F]] =
+  )(implicit AG: AsynchronousChannelGroup, EC: ExecutionContext, F: Effect[F], S: Scheduler, L: Logger[F]):Stream[F,KafkaClient[F]] =
     KafkaClient(ensemble, protocol, clientName)
 
 
