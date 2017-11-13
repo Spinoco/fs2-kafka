@@ -19,11 +19,13 @@ object Fs2KafkaRuntimeSpec {
   val ZookeeperImage = "jplock/zookeeper:3.4.8"
   val DefaultZkPort:Int = 2181
 
-  val Kafka8Image =  "wurstmeister/kafka:0.8.2.0"
-  val Kafka9Image =  "wurstmeister/kafka:0.9.0.1"
-  val Kafka10Image = "wurstmeister/kafka:0.10.0.0"
-  val Kafka101Image = "wurstmeister/kafka:0.10.1.0"
-  val Kafka102Image = "wurstmeister/kafka:0.10.2.0"
+  val Kafka_0_8_2_0_Image =  "wurstmeister/kafka:0.8.2.0"
+  val Kafka_0_9_0_1_Image =  "wurstmeister/kafka:0.9.0.1"
+  val Kafka_0_10_0_Image = "wurstmeister/kafka:0.10.0.0"
+  val Kafka_0_10_1_Image = "wurstmeister/kafka:0.10.1.0"
+  val Kafka_0_10_2_Image = "wurstmeister/kafka:0.10.2.0"
+  val Kafka_0_11_0_1_Image = "wurstmeister/kafka:0.11.0.1"
+  val Kafka_1_0_0_Image = "wurstmeister/kafka:1.0.0"
 }
 
 object KafkaRuntimeRelease extends Enumeration {
@@ -32,6 +34,8 @@ object KafkaRuntimeRelease extends Enumeration {
   val V_0_10_0 = Value
   val V_0_10_1 = Value
   val V_0_10_2 = Value
+  val V_0_11_0 = Value
+  val V_1_0_0 = Value
 }
 
 
@@ -171,11 +175,13 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   def startK(version: KafkaRuntimeRelease.Value, brokerId: Int):Task[String @@ DockerId] = {
     val port = 9092+ 100*(brokerId -1)
     version match {
-      case KafkaRuntimeRelease.V_8_2_0 => startKafka(Kafka8Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_0_9_0_1 => startKafka(Kafka9Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_0_10_0 => startKafka(Kafka10Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_0_10_1 => startKafka(Kafka101Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_0_10_2 => startKafka(Kafka102Image, port = port, brokerId = brokerId)
+      case KafkaRuntimeRelease.V_8_2_0 => startKafka(Kafka_0_8_2_0_Image, port = port, brokerId = brokerId)
+      case KafkaRuntimeRelease.V_0_9_0_1 => startKafka(Kafka_0_9_0_1_Image, port = port, brokerId = brokerId)
+      case KafkaRuntimeRelease.V_0_10_0 => startKafka(Kafka_0_10_0_Image, port = port, brokerId = brokerId)
+      case KafkaRuntimeRelease.V_0_10_1 => startKafka(Kafka_0_10_1_Image, port = port, brokerId = brokerId)
+      case KafkaRuntimeRelease.V_0_10_2 => startKafka(Kafka_0_10_2_Image, port = port, brokerId = brokerId)
+      case KafkaRuntimeRelease.V_0_11_0 => startKafka(Kafka_0_11_0_1_Image, port = port, brokerId = brokerId)
+      case KafkaRuntimeRelease.V_1_0_0 => startKafka(Kafka_1_0_0_Image, port = port, brokerId = brokerId)
     }
   }
 
@@ -201,6 +207,12 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
       case KafkaRuntimeRelease.V_0_10_2 =>
         followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
+
+      case KafkaRuntimeRelease.V_0_11_0 =>
+        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
+
+      case KafkaRuntimeRelease.V_1_0_0 =>
+        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
     }
   }
 
@@ -220,6 +232,12 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
         followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
 
       case KafkaRuntimeRelease.V_0_10_2 =>
+        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
+
+      case KafkaRuntimeRelease.V_0_11_0 =>
+        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
+
+      case KafkaRuntimeRelease.V_1_0_0 =>
         followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
     }
   }
