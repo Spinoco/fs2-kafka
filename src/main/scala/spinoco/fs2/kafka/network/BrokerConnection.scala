@@ -92,7 +92,7 @@ object BrokerConnection {
       }
        .flatMap { rm =>
          MessageCodec.requestCodec.encode(rm).fold(
-           err => fail(new Throwable(s"Failed to serialize message: $err : $rm"))
+           err => raiseError(new Throwable(s"Failed to serialize message: $err : $rm"))
            , data => eval(sendOne(Chunk.bytes(data.toByteArray)))
          )
        }
@@ -126,10 +126,10 @@ object BrokerConnection {
             val buff = acc ++ ByteVector.view(bs.values, bs.offset, bs.size)
             val (rem, sz, out) = collectChunks(buff, msgSz)
 
-            Pull.segment(out) *> go(rem, sz, tail)
+            Pull.segment(out) >> go(rem, sz, tail)
 
           case None =>
-            if (acc.nonEmpty) Pull.fail(new Throwable(s"Input terminated before all data were consumed. Buff: $acc"))
+            if (acc.nonEmpty) Pull.raiseError(new Throwable(s"Input terminated before all data were consumed. Buff: $acc"))
             else Pull.done
         }
       }
@@ -189,16 +189,16 @@ object BrokerConnection {
       openRequests: Ref[F,Map[Int,RequestMessage]]
     ):Pipe[F,ByteVector,ResponseMessage] = {
       _.flatMap { bs =>
-        if (bs.size < 4) Stream.fail(new Throwable(s"Message chunk does not have correlation id included: $bs"))
+        if (bs.size < 4) Stream.raiseError(new Throwable(s"Message chunk does not have correlation id included: $bs"))
         else {
           val correlationId = bs.take(4).toInt()
           eval(openRequests.modify{ _ - correlationId}).flatMap { case Change(m, _) =>
             m.get(correlationId) match {
-              case None => Stream.fail(new Throwable(s"Received message correlationId for message that does not exists: $correlationId : $bs : $m"))
+              case None => Stream.raiseError(new Throwable(s"Received message correlationId for message that does not exists: $correlationId : $bs : $m"))
               case Some(req) =>
                 MessageCodec.responseCodecFor(req.version, ApiKey.forRequest(req.request)).decode(bs.drop(4).bits)
                 .fold(
-                  err => Stream.fail(new Throwable(s"Failed to decode repsonse to request: $err : $req : $bs"))
+                  err => Stream.raiseError(new Throwable(s"Failed to decode repsonse to request: $err : $req : $bs"))
                   , result => Stream.emit(ResponseMessage(correlationId,result.value))
                 )
             }

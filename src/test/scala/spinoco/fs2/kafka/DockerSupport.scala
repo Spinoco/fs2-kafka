@@ -64,8 +64,8 @@ object DockerSupport {
     Stream.eval(async.unboundedQueue[IO,String]).flatMap { q =>
 
       def enqueue(s: String): Unit = {
-        semaphore.increment *>
-        isDone.get.flatMap { done => if (!done) q.enqueue1(s) else IO.unit } *>
+        semaphore.increment >>
+        isDone.get.flatMap { done => if (!done) q.enqueue1(s) else IO.unit } >>
         semaphore.decrement
       } unsafeRunSync
 
@@ -78,7 +78,7 @@ object DockerSupport {
 
       Stream.bracket(IO(Process(s"docker logs -f $imageId").run(logger)))(
         _ => q.dequeue
-        , p => semaphore.increment *> isDone.modify(_ => true) *> IO(p.destroy()) *> semaphore.decrement
+        , p => semaphore.increment >> isDone.modify(_ => true) >> IO(p.destroy()) >> semaphore.decrement
       )
     }}}
   }
@@ -96,7 +96,7 @@ object DockerSupport {
     * Issues a kill to image with given id
     */
   def killImage(imageId: String @@ DockerId):IO[Unit] = {
-    IO { Process(s"docker kill $imageId").!! } *>
+    IO { Process(s"docker kill $imageId").!! } >>
     runningImages.flatMap { allRun =>
       if (allRun.exists(imageId.startsWith)) killImage(imageId)
       else IO.pure(())
@@ -107,7 +107,7 @@ object DockerSupport {
     * Cleans supplied image from the docker
     */
   def cleanImage(imageId: String @@ DockerId):IO[Unit] = {
-    IO { Process(s"docker rm $imageId").!! } *>
+    IO { Process(s"docker rm $imageId").!! } >>
     availableImages.flatMap { allAvail =>
       if (allAvail.exists(imageId.startsWith)) cleanImage(imageId)
       else IO.pure(())

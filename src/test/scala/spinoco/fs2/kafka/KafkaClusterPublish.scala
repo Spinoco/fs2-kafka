@@ -31,16 +31,16 @@ class KafkaClusterPublish extends Fs2KafkaRuntimeSpec {
         } map (Left(_))
       }
 
-      ((withKafkaCluster(runtime) flatMap { nodes =>
-        S.sleep[IO](3.second) *>
-        Stream.eval(createKafkaTopic(nodes.broker1DockerId, testTopicA)) *> {
+      withKafkaCluster(runtime).flatMap { nodes =>
+        S.sleep[IO](3.second) >>
+        Stream.eval(createKafkaTopic(nodes.broker1DockerId, testTopicA)) >> {
           KafkaClient[IO](Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
-            awaitLeaderAvailable(kc, testTopicA, part0) *>
+            awaitLeaderAvailable(kc, testTopicA, part0) >>
             publish(kc) ++
               (kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_)))
           } take 20
         }
-      } runLog  ) unsafeRunTimed 100.seconds) shouldBe Some(
+      }.compile.toVector.unsafeRunTimed(100.seconds) shouldBe Some(
         (for { idx <- 0 until 10} yield Left(offset(idx))).toVector ++
           (for { idx <- 0 until 10} yield Right(TopicMessage(offset(idx), ByteVector(1), ByteVector(idx), offset(10)))).toVector
       )

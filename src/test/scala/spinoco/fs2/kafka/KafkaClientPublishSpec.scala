@@ -24,11 +24,11 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } drain
       }
 
-      ((withKafkaClient(runtime, protocol) { kc =>
+      withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
-        S.sleep[IO](2.second) *> // wait for message to be accepted
+        S.sleep[IO](2.second) >> // wait for message to be accepted
         kc.subscribe(testTopicA, part0, offset(0l)).take(10)
-      } runLog  ) unsafeRunTimed 30.seconds).size shouldBe 10
+      }.compile.toVector.unsafeRunTimed(30.seconds).map(_.size) shouldBe Some(10)
 
     }
 
@@ -39,12 +39,13 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } map (Left(_))
       }
 
-      (((withKafkaClient(runtime, protocol) { kc =>
+      withKafkaClient(runtime, protocol) { kc =>
           publish(kc) ++
           (kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_)))
-      } take 20)  runLog) unsafeRunTimed 30.seconds) shouldBe
+      }.take(20).compile.toVector.unsafeRunTimed(30.seconds) shouldBe Some {
         (for { idx <- 0 until 10} yield Left(offset(idx))).toVector ++
         (for { idx <- 0 until 10} yield Right(TopicMessage(offset(idx), ByteVector(1), ByteVector(idx), offset(10)))).toVector
+      }
     }
 
 
@@ -55,11 +56,11 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } drain
       }
 
-      ((withKafkaClient(runtime, protocol) { kc =>
+      withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
-        S.sleep[IO](3.second) *> // wait for message to be accepted
-        kc.subscribe(testTopicA, part0, offset(0l)) take (100)
-      } runLog  ) unsafeRunTimed 30.seconds).size shouldBe 100
+        S.sleep[IO](3.second) >> // wait for message to be accepted
+        kc.subscribe(testTopicA, part0, offset(0l)).take(100)
+      }.compile.toVector.unsafeRunTimed(30.seconds).map(_.size) shouldBe Some(100)
 
     }
 
@@ -71,13 +72,13 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } map (Left(_))
       }
 
-      (((withKafkaClient(runtime, protocol) { kc =>
+      withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
         (kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_)))
-      } take 110 ) runLog ) unsafeRunTimed 30.seconds) shouldBe
+      }.take(110).compile.toVector.unsafeRunTimed(30.seconds) shouldBe Some {
         (for { idx <- 0 until 10} yield Left(offset(idx*10))).toVector ++
         (for { idx <- 0 until 100} yield Right(TopicMessage(offset(idx), ByteVector(idx % 10), ByteVector(idx / 10), offset(100)))).toVector
-
+      }
     }
 
 
@@ -88,11 +89,11 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } drain
       }
 
-      ((withKafkaClient(runtime, protocol) { kc =>
+      withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
-        S.sleep[IO](3.second) *> // wait for message to be accepted
+        S.sleep[IO](3.second) >> // wait for message to be accepted
         kc.subscribe(testTopicA, part0, offset(0l)).take(100)
-      } runLog  ) unsafeRunTimed 30.seconds).size shouldBe 100
+      }.compile.toVector.unsafeRunTimed(30.seconds).map(_.size) shouldBe Some(100)
 
     }
 
@@ -104,13 +105,13 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } map (Left(_))
       }
 
-      ((withKafkaClient(runtime, protocol) { kc =>
+      withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
         ((kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_))) take 100)
-      } runLog ) unsafeRunTimed 30.seconds) shouldBe
+      }.compile.toVector.unsafeRunTimed(30.seconds) shouldBe Some {
         (for { idx <- 0 until 10} yield Left(offset(idx*10))).toVector ++
-          (for { idx <- 0 until 100} yield Right(TopicMessage(offset(idx), ByteVector(idx % 10), ByteVector(idx / 10), offset(100)))).toVector
-
+        (for { idx <- 0 until 100} yield Right(TopicMessage(offset(idx), ByteVector(idx % 10), ByteVector(idx / 10), offset(100)))).toVector
+      }
     }
 
 
@@ -121,13 +122,13 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } map (Left(_))
       }
 
-      ((withKafkaClient(runtime, protocol) { kc =>
+      withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
         ((kc.subscribe(testTopicA, part0, offset(5l)) map (Right(_)))  take 95)
-      } runLog ) unsafeRunTimed 30.seconds) shouldBe
-        ((for { idx <- 0 until 10} yield Left(offset(idx*10))).toVector ++
-          (for { idx <- 0 until 100} yield Right(TopicMessage(offset(idx), ByteVector(idx % 10), ByteVector(idx / 10), offset(100)))).drop(5).toVector)
-
+      }.compile.toVector.unsafeRunTimed(30.seconds) shouldBe Some {
+        (for { idx <- 0 until 10} yield Left(offset(idx*10))).toVector ++
+        (for { idx <- 0 until 100} yield Right(TopicMessage(offset(idx), ByteVector(idx % 10), ByteVector(idx / 10), offset(100)))).drop(5).toVector
+      }
     }
 
 
@@ -138,11 +139,11 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } drain
       }
 
-      ((withKafkaClient(runtime, protocol) { kc =>
+      withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
-        S.sleep[IO](3.second) *> // wait for message to be accepted
+        S.sleep[IO](3.second) >> // wait for message to be accepted
         kc.subscribe(testTopicA, part0, offset(0l)).take(100)
-      } runLog  ) unsafeRunTimed 30.seconds).size shouldBe 100
+      }.compile.toVector.unsafeRunTimed(30.seconds).map(_.size) shouldBe Some(100)
 
     }
 
@@ -154,13 +155,13 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         } map (Left(_))
       }
 
-      ((withKafkaClient(runtime, protocol) { kc =>
+      withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
         ((kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_))) take 100)
-      } runLog ) unsafeRunTimed 30.seconds ) shouldBe
+      }.compile.toVector.unsafeRunTimed(30.seconds) shouldBe Some {
         (for { idx <- 0 until 10} yield Left(offset(idx*10))).toVector ++
         (for { idx <- 0 until 100} yield Right(TopicMessage(offset(idx), ByteVector(idx % 10), ByteVector(idx / 10), offset(100)))).toVector
-
+      }
     }
 
   }
