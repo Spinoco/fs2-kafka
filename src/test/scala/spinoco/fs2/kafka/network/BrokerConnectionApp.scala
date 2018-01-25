@@ -47,7 +47,7 @@ object BrokerConnectionApp extends App {
     .evalMap(rcv => IO {
       println(rcv)
     })
-    .run.unsafeRunSync()
+    .compile.drain.unsafeRunSync()
   }
 
   def publish = {
@@ -77,7 +77,7 @@ object BrokerConnectionApp extends App {
     .evalMap(rcv => IO {
       println(rcv)
     })
-    .run.unsafeRunSync()
+    .compile.drain.unsafeRunSync()
 
   }
 
@@ -106,7 +106,7 @@ object BrokerConnectionApp extends App {
     .evalMap(rcv => IO {
       println(rcv)
     })
-    .run.unsafeRunSync()
+    .compile.drain.unsafeRunSync()
   }
 
   //metadata

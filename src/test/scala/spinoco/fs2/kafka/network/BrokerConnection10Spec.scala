@@ -57,7 +57,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
 
 
           createTopic ++ publishOne ++ fetchOne
-        }.runLog.unsafeRunSync()
+        }.compile.toVector.unsafeRunSync()
 
       result shouldBe Vector(
         Left(ResponseMessage(1, ProduceResponse(Vector((testTopic1, Vector((part0, PartitionProduceResult(None, tag[Offset](0), None))))), throttleTime = Some(0.millis))))
@@ -85,7 +85,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
 
           createTopic1 ++ createTopic2  ++ fetchMeta
 
-        }.runLog.unsafeRunSync()
+        }.compile.toVector.unsafeRunSync()
 
       val metaResponse = result.collect { case ResponseMessage(1, meta:MetadataResponse) => meta }
 
@@ -112,7 +112,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
 
           createTopic1 ++ fetchOffsets
 
-        }.runLog.unsafeRunSync()
+        }.compile.toVector.unsafeRunSync()
 
       val offsetResponse = result.collect { case ResponseMessage(1, offset:OffsetResponse) => offset }
 

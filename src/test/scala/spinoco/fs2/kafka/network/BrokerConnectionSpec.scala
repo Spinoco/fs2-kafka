@@ -61,7 +61,7 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
       ).covary[IO].through(impl.sendMessages[IO](
         openRequests = ref
         , sendOne = { (chunk:Chunk[Byte]) => IO{ val bs = chunk.toBytes; send = send :+ ByteVector.view(bs.values).drop(bs.offset).take(bs.size) }}
-      )).run.unsafeRunSync()
+      )).compile.drain.unsafeRunSync()
 
       send.size shouldBe 1
       ref.get.unsafeRunSync().get(metaRequestMessage.correlationId) shouldBe Some(metaRequestMessage)
@@ -75,7 +75,7 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
       ).covary[IO].through(impl.sendMessages[IO](
         openRequests = ref
         , sendOne = { (chunk:Chunk[Byte]) => IO{ val bs = chunk.toBytes; send = send :+ ByteVector.view(bs.values).drop(bs.offset).take(bs.size) }}
-      )).run.unsafeRunSync()
+      )).compile.drain.unsafeRunSync()
 
       send.size shouldBe 1
       ref.get.unsafeRunSync().get(produceRequestMessage.correlationId) shouldBe Some(produceRequestMessage)
@@ -89,7 +89,7 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
       ).covary[IO].through(impl.sendMessages[IO](
         openRequests = ref
         , sendOne = { (chunk:Chunk[Byte]) => IO{ val bs = chunk.toBytes; send = send :+ ByteVector.view(bs.values).drop(bs.offset).take(bs.size) }}
-      )).run.unsafeRunSync()
+      )).compile.drain.unsafeRunSync()
 
       send.size shouldBe 1
       ref.get.unsafeRunSync().get(produceRequestMessage.correlationId) shouldBe None
@@ -108,7 +108,7 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
         chunks.foldLeft(Stream.chunk[Byte](Chunk.bytes(ByteVector.fromInt(sizeOfMsg).toArray))) { case (s,next) => s ++ Stream.chunk(next) }
       }.foldLeft(Stream.empty:Stream[IO, Byte])(_ ++ _)
 
-      val resultMsg = source.through(impl.receiveChunks).runLog.unsafeRunSync()
+      val resultMsg = source.through(impl.receiveChunks).compile.toVector.unsafeRunSync()
       val expectedMsg = messages.map { oneMsg =>
         oneMsg.foldLeft(ByteVector.empty){ case (bv, n) => bv ++ ByteVector.view(n.toArray) }
       }
@@ -120,14 +120,14 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
     "correctly decodes received message (MetadataResponse)" in {
 
       val ref = async.refOf[IO, Map[Int,RequestMessage]](Map.empty).unsafeRunSync()
-      ref.setSyncPure(Map(1 -> metaRequestMessage)).unsafeRunSync()
+      ref.setSync(Map(1 -> metaRequestMessage)).unsafeRunSync()
 
       val bytes =
       MessageCodec.responseCodecFor(ProtocolVersion.Kafka_0_10,ApiKey.MetadataRequest).encode(metaResponse.response)
       .flatMap(rbv => MessageCodec.responseCorrelationCodec.encode(metaResponse.correlationId -> rbv))
       .getOrElse(fail("Encoding of response failed"))
 
-      val result = Stream(bytes.bytes.drop(4)).covary[IO].through(impl.decodeReceived[IO](ref)).runLog.unsafeRunSync()
+      val result = Stream(bytes.bytes.drop(4)).covary[IO].through(impl.decodeReceived[IO](ref)).compile.toVector.unsafeRunSync()
 
       result shouldBe Vector(metaResponse)
       ref.get.unsafeRunSync() shouldBe Map()

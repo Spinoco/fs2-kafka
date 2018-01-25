@@ -96,7 +96,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   /** stops and cleans the given image **/
   def stopImage(zkImageId: String @@ DockerId):IO[Unit] = {
     runningImages flatMap { allRunning =>
-      if (allRunning.exists(zkImageId.startsWith)) killImage(zkImageId) *> cleanImage(zkImageId)
+      if (allRunning.exists(zkImageId.startsWith)) killImage(zkImageId) >> cleanImage(zkImageId)
       else availableImages flatMap { allAvailable =>
         if (allAvailable.exists(zkImageId.startsWith)) cleanImage(zkImageId)
         else IO.pure(())
@@ -146,14 +146,15 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   /** process emitting once docker id of zk and kafka in singleton (one node) **/
   def withKafkaSingleton[A](version: KafkaRuntimeRelease.Value)(f: (String @@ DockerId, String @@ DockerId) => Stream[IO, A]):Stream[IO,A] = {
-    Stream.eval(createNetwork("fs2-kafka-network")) *>
+    Stream.eval(createNetwork("fs2-kafka-network")) >>
     Stream.eval(startZk()).flatMap { zkId =>
     awaitZKStarted(zkId) ++ S.sleep_[IO](2.seconds) ++
     Stream.eval(startK(version, 1)).flatMap { kafkaId =>
       (awaitKStarted(version, kafkaId) ++ f(zkId, kafkaId))
       .onFinalize {
-        stopImage(kafkaId) *>
-        stopImage(zkId) *>
+        IO.apply(println("Stopping and deleting")) >>
+        stopImage(kafkaId) >>
+        stopImage(zkId) >>
         removeNetwork("fs2-kafka-network")
       }
     }}
@@ -162,8 +163,8 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   def withKafkaClient[A](version: KafkaRuntimeRelease.Value, protocol: ProtocolVersion.Value)(f: KafkaClient[IO] => Stream[IO, A]): Stream[IO, A] = {
     withKafkaSingleton(version) { (_, kafkaDockerId) =>
-      S.sleep[IO](1.second) *>
-      Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) *>
+      S.sleep[IO](1.second) >>
+      Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
       KafkaClient[IO](Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
         awaitLeaderAvailable(kc, testTopicA, part0).drain ++ f(kc)
       }
@@ -265,9 +266,10 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   def publishNMessages(client: KafkaClient[IO],from: Int, to: Int, quorum: Boolean = false): IO[Unit] = {
 
     Stream.range(from, to).evalMap { idx =>
+      println(s"publishing $idx")
       client.publish1(testTopicA, part0, ByteVector(1),  ByteVector(idx), quorum, 10.seconds)
     }
-    .run
+    .compile.drain
 
   }
 
@@ -285,7 +287,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
         case BrokerAddress(_, 9092) => Stream.eval_(killImage(nodes.nodes(tag[Broker](1))))
         case BrokerAddress(_, 9192) => Stream.eval_(killImage(nodes.nodes(tag[Broker](2))))
         case BrokerAddress(_, 9292) => Stream.eval_(killImage(nodes.nodes(tag[Broker](3))))
-        case other => Stream.fail(new Throwable(s"Unexpected broker: $other"))
+        case other => Stream.raiseError(new Throwable(s"Unexpected broker: $other"))
       }
     }
   }
