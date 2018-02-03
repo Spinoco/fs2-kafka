@@ -28,7 +28,7 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
         publish(kc) ++
         S.sleep[IO](2.second) >> // wait for message to be accepted
         kc.subscribe(testTopicA, part0, offset(0l)).take(10)
-      }.compile.toVector.unsafeRunTimed(30.seconds).map(_.size) shouldBe Some(10)
+      }.compile.toVector.unsafeRunSync().size shouldBe 10
 
     }
 

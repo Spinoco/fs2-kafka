@@ -4,7 +4,6 @@ import java.net.InetAddress
 
 import cats.effect.IO
 import cats.syntax.all._
-
 import fs2._
 import org.scalatest.{Args, Status}
 import scodec.bits.ByteVector
@@ -13,8 +12,9 @@ import shapeless.tag.@@
 import spinoco.fs2.kafka.network.BrokerAddress
 import spinoco.protocol.kafka.{Broker, PartitionId, ProtocolVersion, TopicName}
 
-import scala.sys.process.Process
+import scala.sys.process.{Process, ProcessLogger}
 import scala.concurrent.duration._
+import scala.util.Try
 
 
 object Fs2KafkaRuntimeSpec {
@@ -26,6 +26,9 @@ object Fs2KafkaRuntimeSpec {
   val Kafka10Image = "wurstmeister/kafka:0.10.0.0"
   val Kafka101Image = "wurstmeister/kafka:0.10.1.0"
   val Kafka102Image = "wurstmeister/kafka:0.10.2.0"
+  val Kafka11Image = "wurstmeister/kafka:0.11.0.0"
+  val Kafka1101Image = "wurstmeister/kafka:0.11.0.1"
+  val Kafka1Image = "wurstmeister/kafka:1.0.0"
 }
 
 object KafkaRuntimeRelease extends Enumeration {
@@ -34,6 +37,9 @@ object KafkaRuntimeRelease extends Enumeration {
   val V_0_10_0 = Value
   val V_0_10_1 = Value
   val V_0_10_2 = Value
+  val V_0_11_0 = Value
+  val V_0_11_0_1 = Value
+  val V_1_0_0 = Value
 }
 
 
@@ -45,7 +51,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   import DockerSupport._
   import Fs2KafkaRuntimeSpec._
 
-  val runtime: KafkaRuntimeRelease.Value = Option(System.getenv().get("KAFKA_TEST_RUNTIME")).map(KafkaRuntimeRelease.withName).getOrElse(KafkaRuntimeRelease.V_0_10_2)
+  val runtime: KafkaRuntimeRelease.Value = Option(System.getenv().get("KAFKA_TEST_RUNTIME")).map(KafkaRuntimeRelease.withName).getOrElse(KafkaRuntimeRelease.V_0_11_0)
   val protocol: ProtocolVersion.Value = Option(System.getenv().get("KAFKA_TEST_PROTOCOL")).map(ProtocolVersion.withName).getOrElse(ProtocolVersion.Kafka_0_10_2)
 
   def skipFor(versions: (KafkaRuntimeRelease.Value, ProtocolVersion.Value)*)(test: => Any): Any = {
@@ -143,16 +149,24 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
     ()
   }
 
+  def cleanAll: IO[Unit] = IO {
+    val images = Process("docker", Seq("ps", "-qa")).lineStream
+    Try(Process("docker", Seq("kill") ++ images).!!(ProcessLogger(_ => ())))
+    Try(Process("docker", Seq("rm") ++ images).!!(ProcessLogger(_ => ())))
+    Try(Process("docker", Seq("network", "rm", "fs2-kafka-network") ++ images).!!(ProcessLogger(_ => ())))
+    ()
+  }
+
 
   /** process emitting once docker id of zk and kafka in singleton (one node) **/
   def withKafkaSingleton[A](version: KafkaRuntimeRelease.Value)(f: (String @@ DockerId, String @@ DockerId) => Stream[IO, A]):Stream[IO,A] = {
+    Stream.eval(cleanAll) >>
     Stream.eval(createNetwork("fs2-kafka-network")) >>
     Stream.eval(startZk()).flatMap { zkId =>
     awaitZKStarted(zkId) ++ S.sleep_[IO](2.seconds) ++
     Stream.eval(startK(version, 1)).flatMap { kafkaId =>
       (awaitKStarted(version, kafkaId) ++ f(zkId, kafkaId))
       .onFinalize {
-        IO.apply(println("Stopping and deleting")) >>
         stopImage(kafkaId) >>
         stopImage(zkId) >>
         removeNetwork("fs2-kafka-network")
@@ -179,6 +193,9 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
       case KafkaRuntimeRelease.V_0_10_0 => startKafka(Kafka10Image, port = port, brokerId = brokerId)
       case KafkaRuntimeRelease.V_0_10_1 => startKafka(Kafka101Image, port = port, brokerId = brokerId)
       case KafkaRuntimeRelease.V_0_10_2 => startKafka(Kafka102Image, port = port, brokerId = brokerId)
+      case KafkaRuntimeRelease.V_0_11_0 => startKafka(Kafka11Image, port = port, brokerId = brokerId)
+      case KafkaRuntimeRelease.V_0_11_0_1 => startKafka(Kafka1101Image, port = port, brokerId = brokerId)
+      case KafkaRuntimeRelease.V_1_0_0 => startKafka(Kafka1Image, port = port, brokerId = brokerId)
     }
   }
 
@@ -204,6 +221,15 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
       case KafkaRuntimeRelease.V_0_10_2 =>
         followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
+
+      case KafkaRuntimeRelease.V_0_11_0 =>
+        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server 1], started")).drain ++ output
+
+      case KafkaRuntimeRelease.V_0_11_0_1 =>
+        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server 1], started")).drain ++ output
+
+      case KafkaRuntimeRelease.V_1_0_0 =>
+        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server 1], started")).drain ++ output
     }
   }
 
@@ -223,6 +249,15 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
         followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
 
       case KafkaRuntimeRelease.V_0_10_2 =>
+        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
+
+      case KafkaRuntimeRelease.V_0_11_0 =>
+        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
+
+      case KafkaRuntimeRelease.V_0_11_0_1 =>
+        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
+
+      case KafkaRuntimeRelease.V_1_0_0 =>
         followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
     }
   }
