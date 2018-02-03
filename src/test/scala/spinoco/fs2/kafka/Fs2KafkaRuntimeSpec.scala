@@ -51,7 +51,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   import DockerSupport._
   import Fs2KafkaRuntimeSpec._
 
-  val runtime: KafkaRuntimeRelease.Value = Option(System.getenv().get("KAFKA_TEST_RUNTIME")).map(KafkaRuntimeRelease.withName).getOrElse(KafkaRuntimeRelease.V_0_11_0)
+  val runtime: KafkaRuntimeRelease.Value = Option(System.getenv().get("KAFKA_TEST_RUNTIME")).map(KafkaRuntimeRelease.withName).getOrElse(KafkaRuntimeRelease.V_1_0_0)
   val protocol: ProtocolVersion.Value = Option(System.getenv().get("KAFKA_TEST_PROTOCOL")).map(ProtocolVersion.withName).getOrElse(ProtocolVersion.Kafka_0_10_2)
 
   def skipFor(versions: (KafkaRuntimeRelease.Value, ProtocolVersion.Value)*)(test: => Any): Any = {
@@ -229,7 +229,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
         followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server 1], started")).drain ++ output
 
       case KafkaRuntimeRelease.V_1_0_0 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server 1], started")).drain ++ output
+        followImageLog(kafkaId).takeWhile(! _.contains(s"[KafkaServer id=1] started")).drain ++ output
     }
   }
 
@@ -258,7 +258,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
         followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
 
       case KafkaRuntimeRelease.V_1_0_0 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
+        followImageLog(kafkaId).takeWhile(! _.contains(s"[KafkaServer id=$brokerId] started")).drain ++ output
     }
   }
 
