@@ -2,7 +2,7 @@
 Kafka client implemented with [fs2](https://github.com/functional-streams-for-scala/fs2) library
 
 [![Build Status](https://travis-ci.org/Spinoco/fs2-kafka.svg?branch=series/0.2)](https://travis-ci.org/Spinoco/fs2-kafka)
-[![Gitter Chat](https://badges.gitter.im/functional-streams-for-scala/fs2.svg)](https://gitter.im/fs2-http/Lobby)
+[![Gitter Chat](https://badges.gitter.im/functional-streams-for-scala/fs2.svg)](https://gitter.im/fs2-kafka/Lobby)
 
 ## Overview
 
