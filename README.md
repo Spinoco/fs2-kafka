@@ -49,7 +49,6 @@ version  |    scala  |   fs2     |  scodec | shapeless
 Throughout this simple usage guide, please consider having the following imports on your classpath:
 
 ```scala
-import fs2.util.syntax._
 import spinoco.fs2.kafka
 import spinoco.fs2.kafka._
 import spinoco.protocol.kafka._
