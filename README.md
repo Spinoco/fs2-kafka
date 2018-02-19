@@ -18,7 +18,7 @@ fs2-kafka only supports a subset of features compared to the native kafka client
 
 ## Features
 
-- Subscribe to topic / parition, with configurable pre-fetch behaviour.
+- Subscribe to topic / partition, with configurable pre-fetch behaviour.
 - Publish to topic / partition
 - Query metadata from kafka cluster
 - Query offset range for topic / partition
@@ -192,7 +192,7 @@ To subscribe for all messages and await the next messages to be published in a t
 
 ```scala
 
-  kafkaClient.subscribe(topic("topic-A"), parition(0), HeadOffset) : Stream[F, TopicMessage]
+  kafkaClient.subscribe(topic("topic-A"), partition(0), HeadOffset) : Stream[F, TopicMessage]
 
 ```
 
@@ -201,7 +201,7 @@ A more complex example occurs when you want to subscribe for messages and stop t
 ```scala
 
   kafkaClient.offsetRangeFor(topic("topic-A"), partition(0)) flatMap { case (first, next) =>
-    kafkaClient.subscribe(topic("topic-A"), parition(0), first) takeWhile { _.offset <= next }
+    kafkaClient.subscribe(topic("topic-A"), partition(0), first) takeWhile { _.offset <= next }
   }: Stream[F, TopicMessage]
 
 ```
@@ -212,7 +212,7 @@ Very similar to `Head`, the subscription offset can be specified when subscribin
 
 ```scala
   val desiredOffsetToSubscribeFrom: Long = ???
-  kafkaClient.subscribe(topic("topic-A"), parition(0), offset(desiredOffsetToSubscribeFrom)) : Stream[F, TopicMessage]
+  kafkaClient.subscribe(topic("topic-A"), partition(0), offset(desiredOffsetToSubscribeFrom)) : Stream[F, TopicMessage]
 
 ```
 
@@ -222,7 +222,7 @@ When subscribing at `Tail`, the subscriber will receive any messages that have n
 
 ```scala
 
-  kafkaClient.subscribe(topic("topic-A"), parition(0), TailOffset) : Stream[F, TopicMessage]
+  kafkaClient.subscribe(topic("topic-A"), partition(0), TailOffset) : Stream[F, TopicMessage]
 
 ```
 
