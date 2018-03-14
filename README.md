@@ -18,7 +18,7 @@ fs2-kafka only supports a subset of features compared to the native kafka client
 
 ## Features
 
-- Subscribe to topic / parition, with configurable pre-fetch behaviour.
+- Subscribe to topic / partition, with configurable pre-fetch behaviour.
 - Publish to topic / partition
 - Query metadata from kafka cluster
 - Query offset range for topic / partition
