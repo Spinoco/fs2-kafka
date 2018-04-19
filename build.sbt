@@ -22,16 +22,16 @@ lazy val commonSettings = Seq(
     "-Ywarn-value-discard",
     "-Ywarn-unused-import"
    ),
-   javaOptions += "-Djava.net.preferIPv4Stack=true",
+   javaOptions += "-Djava.net.preferIPv4Stack=true, -Djavax.net.debug=all",
    scalacOptions in (Compile, console) ~= {_.filterNot("-Ywarn-unused-import" == _)},
    scalacOptions in (Test, console) <<= (scalacOptions in (Compile, console)),
    libraryDependencies ++= Seq(
       "org.scalatest" %% "scalatest" % "3.0.0" % "test"
       , "org.scalacheck" %% "scalacheck" % "1.13.4" % "test"
-      , "co.fs2" %% "fs2-core" % "0.10.0"
-      , "co.fs2" %% "fs2-io" % "0.10.0"
+      , "co.fs2" %% "fs2-core" % "0.10.3"
+      , "co.fs2" %% "fs2-io" % "0.10.3"
       , "com.spinoco" %% "protocol-kafka" % "0.3.4"
-
+      , "com.spinoco" %% "fs2-crypto" % "0.2.1-SNAPSHOT"
    ),
    scmInfo := Some(ScmInfo(url("https://github.com/Spinoco/fs2-kafka"), "git@github.com:Spinoco/fs2-kafka.git")),
    homepage := None,
@@ -49,6 +49,7 @@ lazy val commonSettings = Seq(
 lazy val testSettings = Seq(
   parallelExecution in Test := false,
   fork in Test := true,
+  javaOptions in Test += "-Djavax.net.debug=all",
   testOptions in Test += Tests.Argument(TestFrameworks.ScalaTest, "-oDF"),
   publishArtifact in Test := true
 )

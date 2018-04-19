@@ -2,6 +2,7 @@ package spinoco.fs2
 
 
 import java.nio.channels.AsynchronousChannelGroup
+import javax.net.ssl.SSLEngine
 
 import cats.effect.Effect
 import fs2._
@@ -55,7 +56,16 @@ package object kafka {
     , protocol: ProtocolVersion.Value
     , clientName: String
   )(implicit AG: AsynchronousChannelGroup, EC: ExecutionContext, F: Effect[F], S: Scheduler, L: Logger[F]):Stream[F,KafkaClient[F]] =
-    KafkaClient(ensemble, protocol, clientName)
+    KafkaClient(ensemble, protocol, clientName, None)
+
+  def sslClient[F[_]](
+    ensemble: Set[BrokerAddress]
+    , protocol: ProtocolVersion.Value
+    , clientName: String
+    , sslEngine: SSLEngine
+    , sslEC: ExecutionContext
+  )(implicit AG: AsynchronousChannelGroup, EC: ExecutionContext, F: Effect[F], S: Scheduler, L: Logger[F]):Stream[F,KafkaClient[F]] =
+    KafkaClient(ensemble, protocol, clientName, Some((sslEngine, sslEC)))
 
 
   /** types correctly name of the topic **/

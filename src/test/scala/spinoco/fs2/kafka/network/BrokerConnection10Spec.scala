@@ -22,7 +22,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
   "Kafka 0.10.0" - {
     "Publish and subscribe message" in {
       val result =
-        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0) { case (zkId, kafkaId) =>
+        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0, false) { case (zkId, kafkaId) =>
           val createTopic = Stream.eval_(createKafkaTopic(kafkaId, testTopic1))
           val publishOne = (Stream(
             RequestMessage(
@@ -36,7 +36,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
               )
             )
           ) ++ S.sleep_[IO](1.minute))
-            .through(BrokerConnection(new InetSocketAddress("127.0.0.1", 9092)))
+            .through(BrokerConnection(new InetSocketAddress("127.0.0.1", 9092), None))
             .take(1).map(Left(_))
 
           val fetchOne =
@@ -52,7 +52,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
                 , topics = Vector((testTopic1, Vector((part0, tag[Offset](0), 10240))))
               )
             )) ++ S.sleep_[IO](1.minute))
-              .through(BrokerConnection(new InetSocketAddress("127.0.0.1", 9092)))
+              .through(BrokerConnection(new InetSocketAddress("127.0.0.1", 9092), None))
               .take(1).map(Right(_))
 
 
@@ -69,7 +69,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
 
     "Fetch metadata for topics" in {
       val result =
-        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0) { case (zkId, kafkaId) =>
+        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0, false) { case (zkId, kafkaId) =>
           val createTopic1 = Stream.eval_(createKafkaTopic(kafkaId, testTopic1))
           val createTopic2 = Stream.eval_(createKafkaTopic(kafkaId, testTopic2))
 
@@ -80,7 +80,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
               , clientId = "test-subscriber"
               , request = MetadataRequest(Vector())
             )) ++ S.sleep_[IO](1.minute))
-              .through(BrokerConnection(new InetSocketAddress("127.0.0.1",9092)))
+              .through(BrokerConnection(new InetSocketAddress("127.0.0.1",9092), None))
               .take(1)
 
           createTopic1 ++ createTopic2  ++ fetchMeta
@@ -97,7 +97,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
 
     "Fetch offsets topics" in {
       val result =
-        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0) { case (zkId, kafkaId) =>
+        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0, false) { case (zkId, kafkaId) =>
           val createTopic1 = Stream.eval_(createKafkaTopic(kafkaId, testTopic1))
 
           val fetchOffsets=
@@ -107,7 +107,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
               , clientId = "test-subscriber"
               , request = OffsetsRequest(tag[Broker](-1), Vector((testTopic1, Vector((partition(0), new Date(-1), Some(10))))))
             )) ++ S.sleep_[IO](1.minute))
-              .through(BrokerConnection(new InetSocketAddress("127.0.0.1",9092)))
+              .through(BrokerConnection(new InetSocketAddress("127.0.0.1",9092), None))
               .take(1)
 
           createTopic1 ++ fetchOffsets

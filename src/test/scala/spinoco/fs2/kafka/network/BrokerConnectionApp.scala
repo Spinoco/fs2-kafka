@@ -43,6 +43,7 @@ object BrokerConnectionApp extends App {
 
     source.through(BrokerConnection(
       address = new InetSocketAddress("127.0.0.1", 9092)
+      , sslEngine = None
     ))
     .evalMap(rcv => IO {
       println(rcv)
@@ -73,6 +74,7 @@ object BrokerConnectionApp extends App {
 
     source.through(BrokerConnection(
       address = new InetSocketAddress("127.0.0.1", 9092)
+      , sslEngine = None
     ))
     .evalMap(rcv => IO {
       println(rcv)
@@ -102,6 +104,7 @@ object BrokerConnectionApp extends App {
 
     source.through(BrokerConnection(
       address = new InetSocketAddress("127.0.0.1", 9092)
+      , sslEngine = None
     ))
     .evalMap(rcv => IO {
       println(rcv)

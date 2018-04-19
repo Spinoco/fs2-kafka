@@ -2,14 +2,18 @@ package spinoco.fs2.kafka.network
 
 import java.net.InetSocketAddress
 import java.nio.channels.AsynchronousChannelGroup
+import javax.net.ssl.SSLEngine
 
 import cats.Monad
 import cats.effect.Effect
+import cats.implicits._
 import fs2._
 import fs2.Stream._
 import fs2.async.Ref
 import fs2.async.Ref.Change
+import fs2.io.tcp.Socket
 import scodec.bits.ByteVector
+import spinoco.fs2.crypto.io.tcp.TLSSocket
 import spinoco.protocol.kafka.Request.{ProduceRequest, RequiredAcks}
 import spinoco.protocol.kafka.codec.MessageCodec
 import spinoco.protocol.kafka.{ApiKey, RequestMessage, ResponseMessage}
@@ -44,11 +48,17 @@ object BrokerConnection {
     */
   def apply[F[_]](
     address: InetSocketAddress
+    , sslEngine: Option[(SSLEngine, ExecutionContext)]
     , writeTimeout: Option[FiniteDuration] = None
     , readMaxChunkSize: Int = 256 * 1024      // 256 Kilobytes
   )(implicit AG:AsynchronousChannelGroup, EC: ExecutionContext, F: Effect[F]): Pipe[F, RequestMessage, ResponseMessage] = {
     (source: Stream[F,RequestMessage]) =>
-      fs2.io.tcp.client(address).flatMap { socket =>
+      fs2.io.tcp.client(address).flatMap { tcpScoket =>
+        Stream.eval[F, Socket[F]](sslEngine match {
+          case None => F.pure(tcpScoket)
+          case Some((engine, sslEC)) => TLSSocket(tcpScoket, engine, sslEC).map(identity)
+        })
+      }.flatMap{ socket =>
         eval(async.refOf(Map.empty[Int,RequestMessage])).flatMap { openRequests =>
           val send = source.through(impl.sendMessages(
             openRequests = openRequests
@@ -83,6 +93,7 @@ object BrokerConnection {
      , sendOne: Chunk[Byte] => F[Unit]
     )(implicit F: Monad[F]):Sink[F,RequestMessage] = {
       _.evalMap { rm =>
+        println("XXXF will send: " + rm)
         rm.request match {
           case produce: ProduceRequest if produce.requiredAcks == RequiredAcks.NoResponse =>
             F.pure(rm)

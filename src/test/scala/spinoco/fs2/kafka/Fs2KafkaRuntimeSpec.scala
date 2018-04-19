@@ -1,6 +1,13 @@
 package spinoco.fs2.kafka
 
 import java.net.InetAddress
+import javax.net.ssl.SSLEngine
+import javax.net.ssl.KeyManagerFactory
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManagerFactory
+import java.io.{File, FileInputStream}
+import java.security.KeyStore
+import java.util.concurrent.Executors
 
 import cats.effect.IO
 import cats.syntax.all._
@@ -12,6 +19,7 @@ import shapeless.tag.@@
 import spinoco.fs2.kafka.network.BrokerAddress
 import spinoco.protocol.kafka.{Broker, PartitionId, ProtocolVersion, TopicName}
 
+import scala.concurrent.ExecutionContext
 import scala.sys.process.{Process, ProcessLogger}
 import scala.concurrent.duration._
 import scala.util.Try
@@ -51,8 +59,9 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   import DockerSupport._
   import Fs2KafkaRuntimeSpec._
 
-  val runtime: KafkaRuntimeRelease.Value = Option(System.getenv().get("KAFKA_TEST_RUNTIME")).map(KafkaRuntimeRelease.withName).getOrElse(KafkaRuntimeRelease.V_1_0_0)
+  val runtime: KafkaRuntimeRelease.Value = Option(System.getenv().get("KAFKA_TEST_RUNTIME")).map(KafkaRuntimeRelease.withName).getOrElse(KafkaRuntimeRelease.V_0_10_1)
   val protocol: ProtocolVersion.Value = Option(System.getenv().get("KAFKA_TEST_PROTOCOL")).map(ProtocolVersion.withName).getOrElse(ProtocolVersion.Kafka_0_10_2)
+  val sslEnabled: Boolean = Option(System.getenv().get("KAFKA_TEST_SSL")).flatMap(v => Try(v.toBoolean).toOption).getOrElse(false)
 
   def skipFor(versions: (KafkaRuntimeRelease.Value, ProtocolVersion.Value)*)(test: => Any): Any = {
     if (! versions.contains((runtime, protocol))) test
@@ -112,22 +121,47 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   }
 
   /** starts kafka. Kafka runs in host network **/
-  def startKafka(image: String, port: Int, zkPort: Int = DefaultZkPort, brokerId: Int = 1): IO[String @@ DockerId] = {
+  def startKafka(image: String, port: Int, zkPort: Int = DefaultZkPort, brokerId: Int = 1, ssl: Boolean = false): IO[String @@ DockerId] = {
     for {
       _ <- dockerVersion.flatMap(_.fold[IO[String]](IO.raiseError(new Throwable("Docker is not available")))(IO.pure))
       _ <- installImageWhenNeeded(image)
-      params = Seq(
-        "--restart=no"
-        , "--net=fs2-kafka-network"
-        , s"--name=broker$brokerId"
-        , s"""--env KAFKA_PORT=$port"""
-        , s"""--env KAFKA_BROKER_ID=$brokerId"""
-        , s"""--env KAFKA_ADVERTISED_HOST_NAME=broker$brokerId"""
-        , s"""--env KAFKA_ADVERTISED_PORT=$port"""
-        , s"""--env KAFKA_ZOOKEEPER_CONNECT=zookeeper:$zkPort"""
-        , s"-p $port:$port/tcp"
+      workingDir <- IO(new File("./cert"))
+      params =
+        if (ssl) {
+          Seq(
+            "--restart=no"
+            , s"-v ${workingDir.getAbsolutePath}:/cert"
+            , "--net=fs2-kafka-network"
+            , s"--name=broker$brokerId"
+            , s"""--env KAFKA_BROKER_ID=$brokerId"""
+            , s"""--env KAFKA_ADVERTISED_PORT=$port"""
+            , s"""--env KAFKA_LISTENERS=PLAINTEXT://broker$brokerId:${port + 1},SSL://broker$brokerId:$port"""
+            , s"""--env KAFKA_ADVERTISED_LISTENERS=SSL://broker$brokerId:$port,PLAINTEXT://broker$brokerId:${port + 1}"""
+            , s"""--env KAFKA_ZOOKEEPER_CONNECT=zookeeper:$zkPort"""
+            , s"""--env KAFKA_SSL_KEYSTORE_LOCATION=/cert/broker$brokerId.keystore.jks"""
+            , s"""--env KAFKA_SSL_KEYSTORE_PASSWORD=pass123"""
+            , s"""--env KAFKA_SSL_KEY_PASSWORD=pass123"""
+            , s"""--env KAFKA_SSL_TRUSTSTORE_LOCATION=/cert/broker$brokerId.keystore.jks"""
+            , s"""--env KAFKA_SSL_TRUSTSTORE_PASSWORD=pass123"""
+            , s"""--env KAFKA_SSL_CLIENT_AUTH=required"""
+            , s"""--env KAFKA_SECURITY_INTER_BROKER_PROTOCOL=SSL"""
+            , s"""--env KAFKA_HEAP_OPTS=-Djavax.net.debug=all""" //TODO remove once SSL is working
+            , s"-p $port:$port/tcp"
+          )
+        } else {
 
-      )
+          Seq(
+            "--restart=no"
+            , "--net=fs2-kafka-network"
+            , s"--name=broker$brokerId"
+            , s"""--env KAFKA_PORT=$port"""
+            , s"""--env KAFKA_BROKER_ID=$brokerId"""
+            , s"""--env KAFKA_ADVERTISED_HOST_NAME=broker$brokerId"""
+            , s"""--env KAFKA_ADVERTISED_PORT=$port"""
+            , s"""--env KAFKA_ZOOKEEPER_CONNECT=zookeeper:$zkPort"""
+            , s"-p $port:$port/tcp"
+          )
+        }
       - <- IO { println(s"STARTING BROKER[$brokerId] @$port") }
       runId <- runImage(image,None)(params :_*)
     } yield runId
@@ -159,12 +193,12 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
 
   /** process emitting once docker id of zk and kafka in singleton (one node) **/
-  def withKafkaSingleton[A](version: KafkaRuntimeRelease.Value)(f: (String @@ DockerId, String @@ DockerId) => Stream[IO, A]):Stream[IO,A] = {
+  def withKafkaSingleton[A](version: KafkaRuntimeRelease.Value, sslEnabled: Boolean)(f: (String @@ DockerId, String @@ DockerId) => Stream[IO, A]):Stream[IO,A] = {
     Stream.eval(cleanAll) >>
     Stream.eval(createNetwork("fs2-kafka-network")) >>
     Stream.eval(startZk()).flatMap { zkId =>
     awaitZKStarted(zkId) ++ S.sleep_[IO](2.seconds) ++
-    Stream.eval(startK(version, 1)).flatMap { kafkaId =>
+    Stream.eval(startK(version, 1, sslEnabled)).flatMap { kafkaId =>
       (awaitKStarted(version, kafkaId) ++ f(zkId, kafkaId))
       .onFinalize {
         stopImage(kafkaId) >>
@@ -175,27 +209,57 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   }
 
-  def withKafkaClient[A](version: KafkaRuntimeRelease.Value, protocol: ProtocolVersion.Value)(f: KafkaClient[IO] => Stream[IO, A]): Stream[IO, A] = {
-    withKafkaSingleton(version) { (_, kafkaDockerId) =>
+  def withKafkaClient[A](version: KafkaRuntimeRelease.Value, protocol: ProtocolVersion.Value, sslEnabled: Boolean)(f: KafkaClient[IO] => Stream[IO, A]): Stream[IO, A] = {
+    withKafkaSingleton(version, sslEnabled) { (_, kafkaDockerId) =>
       S.sleep[IO](1.second) >>
       Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
-      KafkaClient[IO](Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
-        awaitLeaderAvailable(kc, testTopicA, part0).drain ++ f(kc)
+      Stream.eval(configureSSLEngine(sslEnabled)).flatMap { sslEngine =>
+        KafkaClient[IO](Set(localBroker1_9092), protocol, "test-client", sslEngine) flatMap { kc =>
+          awaitLeaderAvailable(kc, testTopicA, part0).drain ++ f(kc)
+        }
       }
     }
   }
 
-  def startK(version: KafkaRuntimeRelease.Value, brokerId: Int):IO[String @@ DockerId] = {
+  def configureSSLEngine(sslEnabled: Boolean): IO[Option[(SSLEngine, ExecutionContext)]] = {
+    IO.suspend{
+      if (sslEnabled) IO(Some{
+
+        val ks: KeyStore = KeyStore.getInstance("JKS")
+        val ts: KeyStore = KeyStore.getInstance("JKS")
+
+        val passphrase: Array[Char] = "pass123".toCharArray
+
+        ks.load(new FileInputStream("./cert/client.keystore.jks"), passphrase)
+        ts.load(new FileInputStream("./cert/client.truststore.jks"), passphrase)
+
+        val kmf: KeyManagerFactory = KeyManagerFactory.getInstance("SunX509")
+        kmf.init(ks, passphrase)
+
+        val tmf: TrustManagerFactory = TrustManagerFactory.getInstance("SunX509")
+        tmf.init(ts)
+
+        val sslCtx: SSLContext = SSLContext.getInstance("TLS")
+
+        sslCtx.init(kmf.getKeyManagers, tmf.getTrustManagers, null)
+        val engine = sslCtx.createSSLEngine()
+        engine.setUseClientMode(true)
+        (engine, ExecutionContext.fromExecutor(Executors.newFixedThreadPool(2)))
+      }) else IO.pure(None)
+    }
+  }
+
+  def startK(version: KafkaRuntimeRelease.Value, brokerId: Int, sslEnabled: Boolean):IO[String @@ DockerId] = {
     val port = 9092+ 100*(brokerId -1)
     version match {
-      case KafkaRuntimeRelease.V_8_2_0 => startKafka(Kafka8Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_0_9_0_1 => startKafka(Kafka9Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_0_10_0 => startKafka(Kafka10Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_0_10_1 => startKafka(Kafka101Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_0_10_2 => startKafka(Kafka102Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_0_11_0 => startKafka(Kafka11Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_0_11_0_1 => startKafka(Kafka1101Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_1_0_0 => startKafka(Kafka1Image, port = port, brokerId = brokerId)
+      case KafkaRuntimeRelease.V_8_2_0 => startKafka(Kafka8Image, port = port, brokerId = brokerId, ssl = sslEnabled)
+      case KafkaRuntimeRelease.V_0_9_0_1 => startKafka(Kafka9Image, port = port, brokerId = brokerId, ssl = sslEnabled)
+      case KafkaRuntimeRelease.V_0_10_0 => startKafka(Kafka10Image, port = port, brokerId = brokerId, ssl = sslEnabled)
+      case KafkaRuntimeRelease.V_0_10_1 => startKafka(Kafka101Image, port = port, brokerId = brokerId, ssl = sslEnabled)
+      case KafkaRuntimeRelease.V_0_10_2 => startKafka(Kafka102Image, port = port, brokerId = brokerId, ssl = sslEnabled)
+      case KafkaRuntimeRelease.V_0_11_0 => startKafka(Kafka11Image, port = port, brokerId = brokerId, ssl = sslEnabled)
+      case KafkaRuntimeRelease.V_0_11_0_1 => startKafka(Kafka1101Image, port = port, brokerId = brokerId, ssl = sslEnabled)
+      case KafkaRuntimeRelease.V_1_0_0 => startKafka(Kafka1Image, port = port, brokerId = brokerId, ssl = sslEnabled)
     }
   }
 
@@ -277,13 +341,13 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   }
 
   /** start 3 node kafka cluster with zookeeper **/
-  def withKafkaCluster(version: KafkaRuntimeRelease.Value): Stream[IO, KafkaNodes] = {
+  def withKafkaCluster(version: KafkaRuntimeRelease.Value, sslEnabled: Boolean): Stream[IO, KafkaNodes] = {
     Stream.eval_(createNetwork("fs2-kafka-network")) ++
     Stream.bracket(startZk())(
       zkId => {
-        awaitZKStarted(zkId) ++ S.sleep_[IO](2.seconds) ++ Stream.bracket(startK(version, 1))(
-          broker1 => awaitKStarted(version, broker1) ++ S.sleep_[IO](2.seconds) ++ Stream.bracket(startK(version, 2))(
-            broker2 => awaitKFollowerReady(version, broker2, 2) ++ S.sleep_[IO](2.seconds) ++ Stream.bracket(startK(version, 3))(
+        awaitZKStarted(zkId) ++ S.sleep_[IO](2.seconds) ++ Stream.bracket(startK(version, 1, sslEnabled))(
+          broker1 => awaitKStarted(version, broker1) ++ S.sleep_[IO](2.seconds) ++ Stream.bracket(startK(version, 2, sslEnabled))(
+            broker2 => awaitKFollowerReady(version, broker2, 2) ++ S.sleep_[IO](2.seconds) ++ Stream.bracket(startK(version, 3, sslEnabled))(
               broker3 => awaitKFollowerReady(version, broker3, 3) ++ S.sleep_[IO](2.seconds) ++ Stream.emit(KafkaNodes(zkId, Map(tag[Broker](1) -> broker1, tag[Broker](2) -> broker2, tag[Broker](3) -> broker3)))
               , stopImage
             )

@@ -3,6 +3,7 @@ package spinoco.fs2.kafka
 import java.nio.channels.AsynchronousChannelGroup
 import java.time.LocalDateTime
 import java.util.Date
+import javax.net.ssl.SSLEngine
 
 import cats.effect.Effect
 import cats.kernel.Eq
@@ -212,6 +213,7 @@ object KafkaClient {
     ensemble: Set[BrokerAddress]
     , protocol: ProtocolVersion.Value
     , clientName: String
+    , sslEngine: Option[(SSLEngine, ExecutionContext)]
     , getNow: => LocalDateTime = LocalDateTime.now()
     , brokerWriteTimeout: Option[FiniteDuration] = Some(10.seconds)
     , queryOffsetTimeout: FiniteDuration = 10.seconds
@@ -222,7 +224,7 @@ object KafkaClient {
 
     def brokerConnection(addr: BrokerAddress):Pipe[F,RequestMessage,ResponseMessage] = s =>
       Stream.eval(addr.toInetSocketAddress).flatMap { inetSocketAddress =>
-        s through BrokerConnection(inetSocketAddress, brokerWriteTimeout, brokerReadMaxChunkSize)
+        s through BrokerConnection(inetSocketAddress, sslEngine, brokerWriteTimeout, brokerReadMaxChunkSize)
       }
 
     val fetchMeta = impl.requestReplyBroker[F, Request.MetadataRequest, Response.MetadataResponse](brokerConnection, protocol, s"$clientName-meta-rq") _
@@ -400,15 +402,17 @@ object KafkaClient {
       requestMeta: (BrokerAddress, MetadataRequest) => F[MetadataResponse]
       , seed: Seq[BrokerAddress]
     )(topicId: String @@ TopicName, partition: Int @@ PartitionId)(implicit F: Effect[F]) :F[Option[BrokerAddress]] = {
+      F.delay(println(" Starting the stuffs")) >>
       Stream.emits(seed)
-      .evalMap { address => requestMeta(address, MetadataRequest(Vector(topicId))).attempt  }
-      .collect { case Right(response) => response }
+      .evalMap { address => println("Requesting meta for: " + address);requestMeta(address, MetadataRequest(Vector(topicId))).attempt  }
+      .collect { case Right(response) => println("Response meta: " + response);response }
       .map { resp =>
         resp.topics.find(_.name == topicId) flatMap { _.partitions.find( _.id == partition)} flatMap {
           _.leader flatMap { leaderId => resp.brokers.find { _.nodeId == leaderId } map { b => BrokerAddress(b.host, b.port) } }
         }
       }
       .collectFirst { case Some(broker) => broker }
+      .handleErrorWith{ err => Stream.eval_(F.delay("Errored out with: " + err)) >> Stream.raiseError(err)}
       .compile
       .last
     }
