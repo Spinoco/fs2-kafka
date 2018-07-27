@@ -3,19 +3,18 @@ package spinoco.fs2.kafka.network
 import java.net.InetSocketAddress
 import java.nio.channels.AsynchronousChannelGroup
 
-import cats.Monad
-import cats.effect.Effect
+import cats.syntax.all._
+import cats.{Applicative, Monad}
+import cats.effect.{ConcurrentEffect, Timer}
+import cats.effect.concurrent.Ref
 import fs2._
 import fs2.Stream._
-import fs2.async.Ref
-import fs2.async.Ref.Change
 import scodec.bits.ByteVector
+
 import spinoco.protocol.kafka.Request.{ProduceRequest, RequiredAcks}
 import spinoco.protocol.kafka.codec.MessageCodec
 import spinoco.protocol.kafka.{ApiKey, RequestMessage, ResponseMessage}
-
 import scala.annotation.tailrec
-import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 
 
@@ -42,14 +41,14 @@ object BrokerConnection {
     * @tparam F
     * @return
     */
-  def apply[F[_]](
+  def apply[F[_] : ConcurrentEffect : Timer](
     address: InetSocketAddress
     , writeTimeout: Option[FiniteDuration] = None
     , readMaxChunkSize: Int = 256 * 1024      // 256 Kilobytes
-  )(implicit AG:AsynchronousChannelGroup, EC: ExecutionContext, F: Effect[F]): Pipe[F, RequestMessage, ResponseMessage] = {
+  )(implicit AG:AsynchronousChannelGroup): Pipe[F, RequestMessage, ResponseMessage] = {
     (source: Stream[F,RequestMessage]) =>
-      fs2.io.tcp.client(address).flatMap { socket =>
-        eval(async.refOf(Map.empty[Int,RequestMessage])).flatMap { openRequests =>
+      Stream.resource(fs2.io.tcp.client[F](address)).flatMap { socket =>
+        eval(Ref.of(Map.empty[Int,RequestMessage])).flatMap { openRequests =>
           val send = source.through(impl.sendMessages(
             openRequests = openRequests
             , sendOne = (x) => socket.write(x, writeTimeout)
@@ -78,16 +77,16 @@ object BrokerConnection {
       * @tparam F
       * @return
       */
-    def sendMessages[F[_]](
+    def sendMessages[F[_] : Applicative](
      openRequests: Ref[F,Map[Int,RequestMessage]]
      , sendOne: Chunk[Byte] => F[Unit]
     )(implicit F: Monad[F]):Sink[F,RequestMessage] = {
       _.evalMap { rm =>
         rm.request match {
           case produce: ProduceRequest if produce.requiredAcks == RequiredAcks.NoResponse =>
-            F.pure(rm)
+            Applicative[F].pure(rm)
           case _ =>
-            F.map(openRequests.modify(_ + (rm.correlationId -> rm))){ _ => rm }
+            openRequests.update(_ + (rm.correlationId -> rm)) as rm
         }
       }
        .flatMap { rm =>
@@ -192,13 +191,13 @@ object BrokerConnection {
         if (bs.size < 4) Stream.raiseError(new Throwable(s"Message chunk does not have correlation id included: $bs"))
         else {
           val correlationId = bs.take(4).toInt()
-          eval(openRequests.modify{ _ - correlationId}).flatMap { case Change(m, _) =>
+          eval(openRequests.modify { m => (m - correlationId, m) }).flatMap { m =>
             m.get(correlationId) match {
               case None => Stream.raiseError(new Throwable(s"Received message correlationId for message that does not exists: $correlationId : $bs : $m"))
               case Some(req) =>
                 MessageCodec.responseCodecFor(req.version, ApiKey.forRequest(req.request)).decode(bs.drop(4).bits)
                 .fold(
-                  err => Stream.raiseError(new Throwable(s"Failed to decode repsonse to request: $err : $req : $bs"))
+                  err => Stream.raiseError(new Throwable(s"Failed to decode response to request: $err : $req : $bs"))
                   , result => Stream.emit(ResponseMessage(correlationId,result.value))
                 )
             }

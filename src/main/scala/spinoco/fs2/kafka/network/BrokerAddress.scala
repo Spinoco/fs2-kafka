@@ -15,8 +15,8 @@ case class BrokerAddress(
   , port: Int
 )  { self =>
 
-  def toInetSocketAddress[F[_]](implicit F: Sync[F]): F[InetSocketAddress] =
-    F.catchNonFatal { new InetSocketAddress(self.host, self.port) }
+  def toInetSocketAddress[F[_] : Sync]: F[InetSocketAddress] =
+    Sync[F].catchNonFatal { new InetSocketAddress(self.host, self.port) }
 
 }
 

@@ -35,7 +35,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
                 , messages = Vector((testTopic1, Vector((part0, Vector(SingleMessage(0l, MessageVersion.V0, None, ByteVector(1, 2, 3), ByteVector(5, 6, 7)))))))
               )
             )
-          ) ++ S.sleep_[IO](1.minute))
+          ) ++ Stream.sleep_[IO](1.minute))
             .through(BrokerConnection(new InetSocketAddress("127.0.0.1", 9092)))
             .take(1).map(Left(_))
 
@@ -51,7 +51,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
                 , maxBytes = None
                 , topics = Vector((testTopic1, Vector((part0, tag[Offset](0), 10240))))
               )
-            )) ++ S.sleep_[IO](1.minute))
+            )) ++ Stream.sleep_[IO](1.minute))
               .through(BrokerConnection(new InetSocketAddress("127.0.0.1", 9092)))
               .take(1).map(Right(_))
 
@@ -79,7 +79,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
               , correlationId = 1
               , clientId = "test-subscriber"
               , request = MetadataRequest(Vector())
-            )) ++ S.sleep_[IO](1.minute))
+            )) ++ Stream.sleep_[IO](1.minute))
               .through(BrokerConnection(new InetSocketAddress("127.0.0.1",9092)))
               .take(1)
 
@@ -106,7 +106,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
               , correlationId = 1
               , clientId = "test-subscriber"
               , request = OffsetsRequest(tag[Broker](-1), Vector((testTopic1, Vector((partition(0), new Date(-1), Some(10))))))
-            )) ++ S.sleep_[IO](1.minute))
+            )) ++ Stream.sleep_[IO](1.minute))
               .through(BrokerConnection(new InetSocketAddress("127.0.0.1",9092)))
               .take(1)
 

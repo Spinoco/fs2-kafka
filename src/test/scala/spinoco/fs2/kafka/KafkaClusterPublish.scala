@@ -32,7 +32,7 @@ class KafkaClusterPublish extends Fs2KafkaRuntimeSpec {
       }
 
       withKafkaCluster(runtime).flatMap { nodes =>
-        S.sleep[IO](3.second) >>
+        Stream.sleep[IO](3.second) >>
         Stream.eval(createKafkaTopic(nodes.broker1DockerId, testTopicA)) >> {
           KafkaClient[IO](Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
             awaitLeaderAvailable(kc, testTopicA, part0) >>

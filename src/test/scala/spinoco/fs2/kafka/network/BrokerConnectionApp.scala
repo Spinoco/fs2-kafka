@@ -1,9 +1,6 @@
 package spinoco.fs2.kafka.network
 
 import java.net.InetSocketAddress
-import java.nio.channels.AsynchronousChannelGroup
-import java.util.concurrent.{Executors, ThreadFactory}
-import java.util.concurrent.atomic.AtomicInteger
 
 import fs2._
 import cats.effect.IO
@@ -12,34 +9,25 @@ import shapeless.tag
 import spinoco.protocol.kafka.Request.RequiredAcks
 import spinoco.protocol.kafka._
 
-import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 
 /**
   * Created by pach on 28/08/16.
   */
 object BrokerConnectionApp extends App {
-  implicit val EC: ExecutionContext = ExecutionContext.global
-  implicit val S = Scheduler.fromScheduledExecutorService(Executors.newScheduledThreadPool(10))
-  implicit val AG = AsynchronousChannelGroup.withFixedThreadPool(10, new ThreadFactory{
-    val idx = new AtomicInteger(0)
-    override def newThread(r: Runnable): Thread = {
-      val t = new Thread(r, s"achg-${idx.incrementAndGet() }")
-      t.setDaemon(true)
-      t
-    }
-  })
+
+  import spinoco.fs2.kafka.Fs2KafkaClientResources._
 
   def metadata = {
     val source =
-      Stream[RequestMessage](
+      Stream[IO, RequestMessage](
         RequestMessage(
           version = ProtocolVersion.Kafka_0_8
           , correlationId = 1
           , clientId = "manager"
           , request = Request.MetadataRequest(Vector.empty)
         )
-      ) ++ S.sleep_[IO](10.seconds)
+      ) ++ Stream.sleep_[IO](10.seconds)
 
     source.through(BrokerConnection(
       address = new InetSocketAddress("127.0.0.1", 9092)
@@ -52,7 +40,7 @@ object BrokerConnectionApp extends App {
 
   def publish = {
     val source =
-      Stream[RequestMessage](
+      Stream[IO, RequestMessage](
         RequestMessage(
           version = ProtocolVersion.Kafka_0_8
           , correlationId = 2
@@ -69,7 +57,7 @@ object BrokerConnectionApp extends App {
             )
           )
         )
-      ) ++ S.sleep_[IO](10.seconds)
+      ) ++ Stream.sleep_[IO](10.seconds)
 
     source.through(BrokerConnection(
       address = new InetSocketAddress("127.0.0.1", 9092)
@@ -83,7 +71,7 @@ object BrokerConnectionApp extends App {
 
   def fetch = {
     val source =
-      Stream[RequestMessage](
+      Stream[IO, RequestMessage](
         RequestMessage(
           version = ProtocolVersion.Kafka_0_8
           , correlationId = 2
@@ -98,7 +86,7 @@ object BrokerConnectionApp extends App {
             )))
           )
         )
-      ) ++ S.sleep_[IO](10.seconds)
+      ) ++ Stream.sleep_[IO](10.seconds)
 
     source.through(BrokerConnection(
       address = new InetSocketAddress("127.0.0.1", 9092)

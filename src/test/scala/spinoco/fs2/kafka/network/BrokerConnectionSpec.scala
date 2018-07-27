@@ -1,16 +1,17 @@
 package spinoco.fs2.kafka.network
 
 import cats.effect.IO
+import cats.effect.concurrent.Ref
 
 import spinoco.fs2.kafka.Fs2KafkaClientSpec
 import fs2._
 import scodec.bits.ByteVector
 import shapeless.tag
+
 import spinoco.protocol.kafka.Request.RequiredAcks
 import spinoco.protocol.kafka.Response.MetadataResponse
 import spinoco.protocol.kafka._
 import spinoco.protocol.kafka.codec.MessageCodec
-
 import scala.concurrent.duration._
 
 class BrokerConnectionSpec extends Fs2KafkaClientSpec {
@@ -55,7 +56,7 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
 
     "will send and register MetadataRequest" in {
       var send:Vector[ByteVector] = Vector.empty
-      val ref = async.refOf[IO, Map[Int, RequestMessage]](Map.empty).unsafeRunSync()
+      val ref = Ref.of[IO, Map[Int, RequestMessage]](Map.empty).unsafeRunSync()
       Stream(
         metaRequestMessage
       ).covary[IO].through(impl.sendMessages[IO](
@@ -69,7 +70,7 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
 
     "will send and register Produce Request " in {
       var send:Vector[ByteVector] = Vector.empty
-      val ref = async.refOf[IO, Map[Int,RequestMessage]](Map.empty).unsafeRunSync()
+      val ref = Ref.of[IO, Map[Int,RequestMessage]](Map.empty).unsafeRunSync()
       Stream(
         produceRequestMessage
       ).covary[IO].through(impl.sendMessages[IO](
@@ -83,7 +84,7 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
 
     "will send Produce Request bot won't register if reply is not expected" in {
       var send:Vector[ByteVector] = Vector.empty
-      val ref = async.refOf[IO, Map[Int,RequestMessage]](Map.empty).unsafeRunSync()
+      val ref = Ref.of[IO, Map[Int,RequestMessage]](Map.empty).unsafeRunSync()
       Stream(
         produceRequestMessage.copy(request = produceRequest.copy(requiredAcks = RequiredAcks.NoResponse))
       ).covary[IO].through(impl.sendMessages[IO](
@@ -105,7 +106,7 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
       val source = messages.map { oneMsg =>
         val sizeOfMsg = oneMsg.map(_.size).sum
         val chunks = oneMsg.map(sb => Chunk.bytes(sb.toArray))
-        chunks.foldLeft(Stream.chunk[Byte](Chunk.bytes(ByteVector.fromInt(sizeOfMsg).toArray))) { case (s,next) => s ++ Stream.chunk(next) }
+        chunks.foldLeft(Stream.chunk[IO, Byte](Chunk.bytes(ByteVector.fromInt(sizeOfMsg).toArray))) { case (s,next) => s ++ Stream.chunk(next) }
       }.foldLeft(Stream.empty:Stream[IO, Byte])(_ ++ _)
 
       val resultMsg = source.through(impl.receiveChunks).compile.toVector.unsafeRunSync()
@@ -119,8 +120,8 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
 
     "correctly decodes received message (MetadataResponse)" in {
 
-      val ref = async.refOf[IO, Map[Int,RequestMessage]](Map.empty).unsafeRunSync()
-      ref.setSync(Map(1 -> metaRequestMessage)).unsafeRunSync()
+      val ref = Ref.of[IO, Map[Int,RequestMessage]](Map.empty).unsafeRunSync()
+      ref.set(Map(1 -> metaRequestMessage)).unsafeRunSync()
 
       val bytes =
       MessageCodec.responseCodecFor(ProtocolVersion.Kafka_0_10,ApiKey.MetadataRequest).encode(metaResponse.response)

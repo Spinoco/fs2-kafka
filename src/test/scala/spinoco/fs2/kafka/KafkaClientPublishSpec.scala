@@ -26,7 +26,7 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
 
       withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
-        S.sleep[IO](2.second) >> // wait for message to be accepted
+        Stream.sleep[IO](2.second) >> // wait for message to be accepted
         kc.subscribe(testTopicA, part0, offset(0l)).take(10)
       }.compile.toVector.unsafeRunTimed(30.seconds).map(_.size) shouldBe Some(10)
 
@@ -58,7 +58,7 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
 
       withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
-        S.sleep[IO](3.second) >> // wait for message to be accepted
+        Stream.sleep[IO](3.second) >> // wait for message to be accepted
         kc.subscribe(testTopicA, part0, offset(0l)).take(100)
       }.compile.toVector.unsafeRunTimed(30.seconds).map(_.size) shouldBe Some(100)
 
@@ -91,7 +91,7 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
 
       withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
-        S.sleep[IO](3.second) >> // wait for message to be accepted
+        Stream.sleep[IO](3.second) >> // wait for message to be accepted
         kc.subscribe(testTopicA, part0, offset(0l)).take(100)
       }.compile.toVector.unsafeRunTimed(30.seconds).map(_.size) shouldBe Some(100)
 
@@ -141,7 +141,7 @@ class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
 
       withKafkaClient(runtime, protocol) { kc =>
         publish(kc) ++
-        S.sleep[IO](3.second) >> // wait for message to be accepted
+        Stream.sleep[IO](3.second) >> // wait for message to be accepted
         kc.subscribe(testTopicA, part0, offset(0l)).take(100)
       }.compile.toVector.unsafeRunTimed(30.seconds).map(_.size) shouldBe Some(100)
 

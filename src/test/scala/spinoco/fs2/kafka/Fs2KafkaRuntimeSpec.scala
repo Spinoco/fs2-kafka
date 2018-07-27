@@ -163,7 +163,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
     Stream.eval(cleanAll) >>
     Stream.eval(createNetwork("fs2-kafka-network")) >>
     Stream.eval(startZk()).flatMap { zkId =>
-    awaitZKStarted(zkId) ++ S.sleep_[IO](2.seconds) ++
+    awaitZKStarted(zkId) ++ Stream.sleep_[IO](2.seconds) ++
     Stream.eval(startK(version, 1)).flatMap { kafkaId =>
       (awaitKStarted(version, kafkaId) ++ f(zkId, kafkaId))
       .onFinalize {
@@ -177,7 +177,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   def withKafkaClient[A](version: KafkaRuntimeRelease.Value, protocol: ProtocolVersion.Value)(f: KafkaClient[IO] => Stream[IO, A]): Stream[IO, A] = {
     withKafkaSingleton(version) { (_, kafkaDockerId) =>
-      S.sleep[IO](1.second) >>
+      Stream.sleep[IO](1.second) >>
       Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
       KafkaClient[IO](Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
         awaitLeaderAvailable(kc, testTopicA, part0).drain ++ f(kc)
@@ -279,21 +279,20 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   /** start 3 node kafka cluster with zookeeper **/
   def withKafkaCluster(version: KafkaRuntimeRelease.Value): Stream[IO, KafkaNodes] = {
     Stream.eval_(createNetwork("fs2-kafka-network")) ++
-    Stream.bracket(startZk())(
-      zkId => {
-        awaitZKStarted(zkId) ++ S.sleep_[IO](2.seconds) ++ Stream.bracket(startK(version, 1))(
-          broker1 => awaitKStarted(version, broker1) ++ S.sleep_[IO](2.seconds) ++ Stream.bracket(startK(version, 2))(
-            broker2 => awaitKFollowerReady(version, broker2, 2) ++ S.sleep_[IO](2.seconds) ++ Stream.bracket(startK(version, 3))(
-              broker3 => awaitKFollowerReady(version, broker3, 3) ++ S.sleep_[IO](2.seconds) ++ Stream.emit(KafkaNodes(zkId, Map(tag[Broker](1) -> broker1, tag[Broker](2) -> broker2, tag[Broker](3) -> broker3)))
-              , stopImage
-            )
-            , stopImage
-          )
-          , stopImage
-        )
+    Stream.bracket(startZk())(stopImage).flatMap { zkId => {
+        awaitZKStarted(zkId) ++ Stream.sleep_[IO](2.seconds) ++
+        Stream.bracket(startK(version, 1))(stopImage).flatMap { broker1 =>
+          awaitKStarted(version, broker1) ++ Stream.sleep_[IO](2.seconds) ++
+          Stream.bracket(startK(version, 2))(stopImage).flatMap { broker2 =>
+            awaitKFollowerReady(version, broker2, 2) ++ Stream.sleep_[IO](2.seconds) ++
+            Stream.bracket(startK(version, 3))(stopImage).flatMap { broker3 =>
+              awaitKFollowerReady(version, broker3, 3) ++ Stream.sleep_[IO](2.seconds) ++
+              Stream.emit(KafkaNodes(zkId, Map(tag[Broker](1) -> broker1, tag[Broker](2) -> broker2, tag[Broker](3) -> broker3)))
+            }
+          }
+        }
       }
-      , stopImage
-    )
+    }
     .onFinalize(removeNetwork("fs2-kafka-network"))
   }
 

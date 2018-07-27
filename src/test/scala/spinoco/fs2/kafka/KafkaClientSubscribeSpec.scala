@@ -26,29 +26,29 @@ class KafkaClientSubscribeSpec extends Fs2KafkaRuntimeSpec {
 
     "subscribe-at-zero-empty" in {
       withKafkaClient(runtime, protocol) { kc =>
-        Stream[Stream[IO, TopicMessage]](
+        Stream[IO, Stream[IO, TopicMessage]](
           kc.subscribe(testTopicA, part0, offset(0l))
-          , S.sleep_[IO](1.second) ++ Stream.eval_(publishNMessages(kc, 0, 20))
-        ).joinUnbounded.take(10)
+          , Stream.sleep_[IO](1.second) ++ Stream.eval_(publishNMessages(kc, 0, 20))
+        ).parJoinUnbounded.take(10)
       }.compile.toVector.unsafeRunTimed(30.seconds).map { _.map { _.copy(tail = offset(0)) } } shouldBe Some(generateTopicMessages(0, 10, 0))
 
     }
 
     "subscriber before head" in {
       withKafkaClient(runtime, protocol) { kc =>
-        Stream[Stream[IO, TopicMessage]](
+        Stream[IO, Stream[IO, TopicMessage]](
           kc.subscribe(testTopicA, part0, offset(-1l))
-          , S.sleep_[IO](1.second) ++ Stream.eval_(publishNMessages(kc, 0, 20))
-        ).joinUnbounded.take(10)
+          , Stream.sleep_[IO](1.second) ++ Stream.eval_(publishNMessages(kc, 0, 20))
+        ).parJoinUnbounded.take(10)
       }.compile.toVector.unsafeRunTimed(30.seconds).map { _.map { _.copy(tail = offset(0)) } } shouldBe Some(generateTopicMessages(0, 10, 0))
     }
 
     "subscriber after head" in {
       withKafkaClient(runtime, protocol) { kc =>
-        Stream[Stream[IO, TopicMessage]](
+        Stream[IO, Stream[IO, TopicMessage]](
           Stream.eval_(publishNMessages(kc, 0, 20)) ++ kc.subscribe(testTopicA, part0, TailOffset)
-          , S.sleep_[IO](1.second) ++ Stream.eval_(publishNMessages(kc, 20, 40))
-        ).joinUnbounded.take(10)
+          , Stream.sleep_[IO](1.second) ++ Stream.eval_(publishNMessages(kc, 20, 40))
+        ).parJoinUnbounded.take(10)
       }.compile.toVector.unsafeRunTimed(30.seconds).map { _.map { _.copy(tail = offset(0)) }} shouldBe Some(generateTopicMessages(20, 30, 0))
 
     }

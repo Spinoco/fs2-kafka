@@ -26,11 +26,13 @@ lazy val commonSettings = Seq(
    scalacOptions in (Compile, console) ~= {_.filterNot("-Ywarn-unused-import" == _)},
    scalacOptions in (Test, console) <<= (scalacOptions in (Compile, console)),
    libraryDependencies ++= Seq(
-      "org.scalatest" %% "scalatest" % "3.0.0" % "test"
-      , "org.scalacheck" %% "scalacheck" % "1.13.4" % "test"
-      , "co.fs2" %% "fs2-core" % "0.10.0"
-      , "co.fs2" %% "fs2-io" % "0.10.0"
-      , "com.spinoco" %% "protocol-kafka" % "0.3.4"
+    compilerPlugin("org.scalamacros" % "paradise" % "2.1.0" cross CrossVersion.full)
+    , "com.github.mpilquist" %% "simulacrum" % "0.13.0"
+    , "org.scalatest" %% "scalatest" % "3.0.0" % "test"
+    , "org.scalacheck" %% "scalacheck" % "1.13.4" % "test"
+    , "co.fs2" %% "fs2-core" % "1.0.0-M2"
+    , "co.fs2" %% "fs2-io" % "1.0.0-M2"
+    , "com.spinoco" %% "protocol-kafka" % "0.3.15"
 
    ),
    scmInfo := Some(ScmInfo(url("https://github.com/Spinoco/fs2-kafka"), "git@github.com:Spinoco/fs2-kafka.git")),
