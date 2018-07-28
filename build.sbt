@@ -8,8 +8,8 @@ lazy val contributors = Seq(
 
 lazy val commonSettings = Seq(
    organization := "com.spinoco",
-   scalaVersion := "2.11.8",
-   crossScalaVersions := Seq("2.11.8",  "2.12.1"),
+   scalaVersion := "2.11.12",
+   crossScalaVersions := Seq("2.11.12",  "2.12.6"),
    scalacOptions ++= Seq(
     "-feature",
     "-deprecation",

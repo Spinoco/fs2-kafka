@@ -11,8 +11,8 @@ addons:
     - broker3
 
 scala:
-  - 2.11.8
-  - 2.12.1
+  - 2.11.12
+  - 2.12.6
 
 cache:
   directories:
