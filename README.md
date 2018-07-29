@@ -1,7 +1,7 @@
 # fs2-kafka
 Kafka client implemented with [fs2](https://github.com/functional-streams-for-scala/fs2) library
 
-[![Build Status](https://travis-ci.org/Spinoco/fs2-kafka.svg?branch=series/0.2)](https://travis-ci.org/Spinoco/fs2-kafka)
+[![Build Status](https://travis-ci.org/Spinoco/fs2-kafka.svg?branch=series/0.4)](https://travis-ci.org/Spinoco/fs2-kafka)
 [![Gitter Chat](https://badges.gitter.im/functional-streams-for-scala/fs2.svg)](https://gitter.im/fs2-kafka/Lobby)
 
 ## Overview
@@ -39,8 +39,8 @@ libraryDependencies += "com.spinoco" %% "fs2-kafka" % "0.2.0"
 
 version  |    scala  |   fs2     |  scodec | shapeless      
 ---------|-----------|-----------|---------|-----------
+0.4.0-M2 | 2.11, 2.12|     1.0.0-M2| 1.10.3  | 2.3.2 
 0.2.0    | 2.11, 2.12|     0.10.0| 1.10.3  | 2.3.2
-0.2.0-RC1| 2.11, 2.12| 0.10.0-RC2| 1.10.3  | 2.3.2
 0.1.2    | 2.11, 2.12|      0.9.7| 1.10.3  | 2.3.2
 
 
