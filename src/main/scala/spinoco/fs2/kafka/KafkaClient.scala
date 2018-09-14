@@ -394,17 +394,22 @@ object KafkaClient {
       * @tparam F
       * @return
       */
-    def leaderFor[F[_] : Sync](
+    def leaderFor[F[_] : Sync: Logger](
       requestMeta: (BrokerAddress, MetadataRequest) => F[MetadataResponse]
       , seed: Seq[BrokerAddress]
-    )(topicId: String @@ TopicName, partition: Int @@ PartitionId) :F[Option[BrokerAddress]] = {
+    )(topicId: String @@ TopicName, partition: Int @@ PartitionId): F[Option[BrokerAddress]] = {
       Stream.emits(seed)
       .evalMap { address => requestMeta(address, MetadataRequest(Vector(topicId))).attempt  }
-      .collect { case Right(response) => response }
-      .map { resp =>
-        resp.topics.find(_.name == topicId) flatMap { _.partitions.find( _.id == partition)} flatMap {
+      .flatMap {
+        case Left(err) => Logger[F].error2(s"Failed to read metadata for $topicId[$partition]", err).drain
+        case Right(response) =>
+          Logger[F].info2(s"Received metadata response for $topicId[$partition]: $response") >> Stream(response)
+      }.flatMap { resp =>
+        val broker = resp.topics.find(_.name == topicId) flatMap { _.partitions.find( _.id == partition)} flatMap {
           _.leader flatMap { leaderId => resp.brokers.find { _.nodeId == leaderId } map { b => BrokerAddress(b.host, b.port) } }
         }
+
+        Logger[F].info2(s"Broker for $topicId[$partition]: $broker") >> Stream(broker)
       }
       .collectFirst { case Some(broker) => broker }
       .compile
