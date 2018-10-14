@@ -8,7 +8,7 @@ lazy val contributors = Seq(
 
 lazy val commonSettings = Seq(
    organization := "com.spinoco",
-   scalaVersion := "2.11.12",
+   scalaVersion := "2.12.6",
    crossScalaVersions := Seq("2.11.12",  "2.12.6"),
    scalacOptions ++= Seq(
     "-feature",
@@ -24,16 +24,15 @@ lazy val commonSettings = Seq(
    ),
    javaOptions += "-Djava.net.preferIPv4Stack=true",
    scalacOptions in (Compile, console) ~= {_.filterNot("-Ywarn-unused-import" == _)},
-   scalacOptions in (Test, console) <<= (scalacOptions in (Compile, console)),
+   scalacOptions in (Test, console) := (scalacOptions in (Compile, console)).value,
    libraryDependencies ++= Seq(
     compilerPlugin("org.scalamacros" % "paradise" % "2.1.0" cross CrossVersion.full)
-    , "com.github.mpilquist" %% "simulacrum" % "0.13.0"
     , "org.scalatest" %% "scalatest" % "3.0.0" % "test"
     , "org.scalacheck" %% "scalacheck" % "1.13.4" % "test"
-    , "co.fs2" %% "fs2-core" % "1.0.0-M2"
-    , "co.fs2" %% "fs2-io" % "1.0.0-M2"
+    , "co.fs2" %% "fs2-core" % "1.0.0"
+    , "co.fs2" %% "fs2-io" % "1.0.0"
     , "com.spinoco" %% "protocol-kafka" % "0.3.15"
-
+    , "com.spinoco" %% "fs2-log-core" % "0.1.0"
    ),
    scmInfo := Some(ScmInfo(url("https://github.com/Spinoco/fs2-kafka"), "git@github.com:Spinoco/fs2-kafka.git")),
    homepage := None,

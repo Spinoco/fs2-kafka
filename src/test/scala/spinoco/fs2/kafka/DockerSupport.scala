@@ -4,6 +4,7 @@ import cats.effect.concurrent.{Ref, Semaphore}
 import cats.effect.IO
 import cats.syntax.all._
 import fs2._
+import fs2.concurrent.Queue
 import shapeless.tag
 import shapeless.tag.@@
 
@@ -61,7 +62,7 @@ object DockerSupport {
   def followImageLog(imageId:String @@ DockerId): Stream[IO,String] = {
     Stream.eval(Semaphore[IO](1)) flatMap { semaphore =>
     Stream.eval(Ref.of(false)) flatMap { isDone =>
-    Stream.eval(async.unboundedQueue[IO,String]).flatMap { q =>
+    Stream.eval(Queue.unbounded[IO,String]).flatMap { q =>
 
       def enqueue(s: String): Unit = {
         semaphore.release >>

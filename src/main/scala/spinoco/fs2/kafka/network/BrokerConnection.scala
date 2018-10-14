@@ -10,10 +10,10 @@ import cats.effect.concurrent.Ref
 import fs2._
 import fs2.Stream._
 import scodec.bits.ByteVector
-
 import spinoco.protocol.kafka.Request.{ProduceRequest, RequiredAcks}
 import spinoco.protocol.kafka.codec.MessageCodec
 import spinoco.protocol.kafka.{ApiKey, RequestMessage, ResponseMessage}
+
 import scala.annotation.tailrec
 import scala.concurrent.duration._
 
@@ -77,7 +77,7 @@ object BrokerConnection {
       * @tparam F
       * @return
       */
-    def sendMessages[F[_] : Applicative](
+    def sendMessages[F[_] : Applicative : RaiseThrowable](
      openRequests: Ref[F,Map[Int,RequestMessage]]
      , sendOne: Chunk[Byte] => F[Unit]
     )(implicit F: Monad[F]):Sink[F,RequestMessage] = {
@@ -98,7 +98,7 @@ object BrokerConnection {
     }
 
 
-    def receiveMessages[F[_]](
+    def receiveMessages[F[_] : RaiseThrowable](
        openRequests: Ref[F,Map[Int,RequestMessage]]
     ):Pipe[F,Byte,ResponseMessage] = {
       _.through(receiveChunks)
@@ -116,16 +116,16 @@ object BrokerConnection {
       *
       * @return
       */
-    def receiveChunks[F[_]]: Pipe[F,Byte,ByteVector] = {
+    def receiveChunks[F[_]: RaiseThrowable]: Pipe[F,Byte,ByteVector] = {
 
       def go(acc: ByteVector, msgSz: Option[Int], s: Stream[F, Byte]): Pull[F, ByteVector, Unit] = {
-        s.pull.unconsChunk flatMap {
+        s.pull.uncons flatMap {
           case Some((ch, tail)) =>
             val bs = ch.toBytes
             val buff = acc ++ ByteVector.view(bs.values, bs.offset, bs.size)
             val (rem, sz, out) = collectChunks(buff, msgSz)
 
-            Pull.segment(out) >> go(rem, sz, tail)
+            Pull.output(Chunk.vector(out)) >> go(rem, sz, tail)
 
           case None =>
             if (acc.nonEmpty) Pull.raiseError(new Throwable(s"Input terminated before all data were consumed. Buff: $acc"))
@@ -141,25 +141,25 @@ object BrokerConnection {
       * Collects chunks of messages received.
       * Each chunk is forming whole message, that means this looks for the first 4 bytes, that indicates message size,
       * then this take up to that size to produce single ByteVector of message content, and emits that
-      * content it term of Segment. Note that Segment may be empty or may contain multiple characters
+      * content it term of Chunk. Note that Segment may be empty or may contain multiple characters
       */
 
     def collectChunks(
       in: ByteVector
       , msgSz:Option[Int]
-    ):(ByteVector, Option[Int], Segment[ByteVector, Unit]) = {
+    ):(ByteVector, Option[Int], Vector[ByteVector]) = {
       @tailrec
-      def go(buff: ByteVector, currSz: Option[Int], acc: Vector[ByteVector]): (ByteVector, Option[Int], Segment[ByteVector, Unit]) = {
+      def go(buff: ByteVector, currSz: Option[Int], acc: Vector[ByteVector]): (ByteVector, Option[Int], Vector[ByteVector]) = {
         currSz match {
           case None =>
-            if (buff.size < 4) (buff, None, Segment.indexedSeq(acc))
+            if (buff.size < 4) (buff, None, acc)
             else {
               val (sz, rem) = buff.splitAt(4)
               go(rem, Some(sz.toInt()), acc)
             }
 
           case Some(sz) =>
-            if (buff.size < sz) (buff, Some(sz), Segment.indexedSeq(acc))
+            if (buff.size < sz) (buff, Some(sz), acc)
             else {
               val (h,t) = buff.splitAt(sz)
               go(t, None, acc :+ h)
@@ -184,7 +184,7 @@ object BrokerConnection {
       * @tparam F
       * @return
       */
-    def decodeReceived[F[_]](
+    def decodeReceived[F[_] : RaiseThrowable](
       openRequests: Ref[F,Map[Int,RequestMessage]]
     ):Pipe[F,ByteVector,ResponseMessage] = {
       _.flatMap { bs =>

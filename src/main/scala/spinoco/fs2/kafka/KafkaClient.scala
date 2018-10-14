@@ -8,19 +8,21 @@ import cats.Applicative
 import cats.effect.concurrent.{Deferred, Ref}
 import cats.effect.{Concurrent, ConcurrentEffect, Sync, Timer}
 import cats.kernel.Eq
-import cats.syntax.all._
+import cats.implicits._
 import fs2._
+import fs2.concurrent.{Queue, SignallingRef}
 import scodec.bits.ByteVector
 import shapeless.{Typeable, tag}
 import shapeless.tag._
-
 import spinoco.fs2.kafka.KafkaClient.impl.PartitionPublishConnection
 import spinoco.fs2.kafka.failure._
 import spinoco.fs2.kafka.network.{BrokerAddress, BrokerConnection}
+import spinoco.fs2.log._
 import spinoco.protocol.kafka.Message.SingleMessage
 import spinoco.protocol.kafka.Request._
 import spinoco.protocol.kafka.{ProtocolVersion, Request, _}
 import spinoco.protocol.kafka.Response._
+
 import scala.concurrent.duration._
 /**
   * Client that binds to kafka broker. Usually application need only one client.
@@ -209,7 +211,7 @@ object KafkaClient {
     *
     * @see [[spinoco.fs2.kafka.client]]
     */
-  def apply[F[_] : Logger : ConcurrentEffect : Timer](
+  def apply[F[_] : ConcurrentEffect : Timer : Log](
     ensemble: Set[BrokerAddress]
     , protocol: ProtocolVersion.Value
     , clientName: String
@@ -275,7 +277,7 @@ object KafkaClient {
       * @param fetchMetadata  A function fo fetch metadata from client specified provided address and signal of state.
       * @return
       */
-    def mkClient[F[_] : Logger : Concurrent : Timer](
+    def mkClient[F[_] : Log : Concurrent : Timer](
       ensemble: Set[BrokerAddress]
       , publishConnection: (String @@ TopicName, Int @@ PartitionId) => F[PartitionPublishConnection[F]]
       , fetchMetadata: (BrokerAddress, MetadataRequest) => F[MetadataResponse]
@@ -434,7 +436,7 @@ object KafkaClient {
      , version: ProtocolVersion.Value
      , clientId: String
     )(address: BrokerAddress): Pipe[F, FetchRequest, (FetchRequest, FetchResponse)] = { s =>
-      Stream.eval(async.signalOf[F, Map[Int, FetchRequest]](Map.empty)).flatMap { openRequestSignal =>
+      Stream.eval(SignallingRef[F, Map[Int, FetchRequest]](Map.empty)).flatMap { openRequestSignal =>
         s.zip(indexer[F]).evalMap { case (request, idx) =>
           openRequestSignal.update(_ + (idx -> request)) as RequestMessage(version, idx, clientId, request)
         }
@@ -456,7 +458,7 @@ object KafkaClient {
     /**
       * Creates connection that allows to submit offset Requests.
       */
-    def offsetConnection[F[_]](
+    def offsetConnection[F[_] : RaiseThrowable](
       brokerConnection : BrokerAddress => Pipe[F, RequestMessage, ResponseMessage]
       , version: ProtocolVersion.Value
       , clientId: String
@@ -485,8 +487,8 @@ object KafkaClient {
         case meta: MetadataResponse => Stream.emit(meta)
         case other =>
           Stream.eval(requestRef.get) flatMap {
-            case Some(request) => Stream.raiseError(InvalidBrokerResponse(address, "MetadataResponse", request, Some(other)))
-            case None => Stream.raiseError(UnexpectedResponse(address, resp))
+            case Some(request) => Stream.raiseError[F](InvalidBrokerResponse(address, "MetadataResponse", request, Some(other)))
+            case None => Stream.raiseError[F](UnexpectedResponse(address, resp))
           }
       }}}
     }
@@ -504,7 +506,7 @@ object KafkaClient {
       * @param queryOffsetRange Queries range of offset kept for given topic. First is head (oldest message offset) second is tail (offset of the message not yet in topic)
       * @return
       */
-    def subscribePartition[F[_] : Concurrent : Timer : Logger](
+    def subscribePartition[F[_] : Concurrent : Timer : Log](
       topicId           : String @@ TopicName
       , partition       : Int @@ PartitionId
       , firstOffset     : Long @@ Offset
@@ -523,9 +525,9 @@ object KafkaClient {
       Stream.eval(Ref.of((firstOffset, 0))) flatMap { startFromRef =>
         def fetchFromBroker(broker: BrokerAddress): Stream[F, TopicMessage] = {
           def tryRecover(rsn: Throwable): Stream[F, TopicMessage] = {
-            Logger[F].error2(s"Leader $broker failed fetch $topicId[$partition]", rsn ) >>
+            Stream.eval(Log[F].error(s"Leader failed fetch ", Detail(broker) and topicId and partition, Some(rsn))) >>
             Stream.eval(startFromRef.get map { _._2 }) flatMap { failures =>
-              if (failures >= leaderFailureMaxAttempts) Stream.raiseError(rsn)
+              if (failures >= leaderFailureMaxAttempts) Stream.raiseError[F](rsn)
               else {
                 Stream.eval(startFromRef.update { case (start, failures) => (start, failures + 1) }) >>
                 Stream.sleep(leaderFailureTimeout) >>
@@ -538,7 +540,7 @@ object KafkaClient {
             }
           }
 
-          Stream.eval(async.unboundedQueue[F, FetchRequest]) flatMap { requestQueue =>
+          Stream.eval(Queue.unbounded[F, FetchRequest]) flatMap { requestQueue =>
             def requestNextChunk: F[Long @@ Offset] = {
               startFromRef.get map { _._1 } flatMap { startFrom =>
                 requestQueue.enqueue1(
@@ -551,12 +553,12 @@ object KafkaClient {
             (requestQueue.dequeue through fetchConnection (broker)) flatMap { case (request, fetch) =>
               fetch.data.find(_._1 == topicId).flatMap(_._2.find(_.partitionId == partition)) match {
                 case None =>
-                  Stream.raiseError(InvalidBrokerResponse(broker, "FetchResponse", request, Some(fetch)))
+                  Stream.raiseError[F](InvalidBrokerResponse(broker, "FetchResponse", request, Some(fetch)))
 
                 case Some(result) =>
                   result.error match {
                     case Some(error) =>
-                      Stream.raiseError(BrokerReportedFailure(broker, request, error))
+                      Stream.raiseError[F](BrokerReportedFailure(broker, request, error))
 
                     case None =>
                       val messages = messagesFromResult(protocol, result)
@@ -578,7 +580,7 @@ object KafkaClient {
               // in normal situations this append shall never be consulted. But the broker may close connection from its side
               // and in that case we need to start querying from the last unfinished request or eventually continue from the
               // as such we fail there and OnError shall handle failure of early termination from broker
-              Stream.raiseError(new Throwable(s"Leader closed connection early: $broker ($topicId, $partition)"))
+              Stream.raiseError[F](new Throwable(s"Leader closed connection early: $broker ($topicId, $partition)"))
             }
 
           } handleErrorWith  {
@@ -591,7 +593,7 @@ object KafkaClient {
                     Stream.eval(startFromRef.get) flatMap { case (startFrom, _) =>
                       if (startFrom < min) Stream.eval(startFromRef.set((min, 0))) >> fetchFromBroker(broker)
                       else if (startFrom > max) Stream.eval(startFromRef.set((max, 0))) >> fetchFromBroker(broker)
-                      else Stream.raiseError(new Throwable(s"Offset supplied is in acceptable range, but still not valid: $startFrom ($min, $max)", err))
+                      else Stream.raiseError[F](new Throwable(s"Offset supplied is in acceptable range, but still not valid: $startFrom ($min, $max)", err))
                     }
 
                   case Left(err) => tryRecover(err)
@@ -610,7 +612,7 @@ object KafkaClient {
             case None =>
               // leader unavailable
               Stream.eval(startFromRef.modify { case (o, fail) => ((o, fail + 1 ), fail) }) flatMap { failures =>
-                if (failures > leaderFailureMaxAttempts) Stream.raiseError(NoBrokerAvailable)
+                if (failures > leaderFailureMaxAttempts) Stream.raiseError[F](NoBrokerAvailable)
                 else Stream.sleep(leaderFailureTimeout) >> start
               }
           }
@@ -729,7 +731,7 @@ object KafkaClient {
       * @param getLeaderFor   Returns a leader for supplied topic and partition
       * @param getLeaderDelay Wait that much time to retry for new leader if leader is not known
       */
-    def publishLeaderConnection[F[_] : Logger : Concurrent : Timer](
+    def publishLeaderConnection[F[_] : Log : Concurrent : Timer](
       connection: BrokerAddress => Pipe[F, RequestMessage, ResponseMessage]
       , protocol:  ProtocolVersion.Value
       , clientId: String
@@ -739,8 +741,8 @@ object KafkaClient {
       , partition: Int @@ PartitionId
     ) : F[PartitionPublishConnection[F]] = {
       type Response = Option[(Long @@ Offset, Option[Date])]
-      async.signalOf[F, Boolean](false) flatMap { termSignal =>
-      async.boundedQueue[F, (ProduceRequest, Either[Throwable, Response] => F[Unit])](1) flatMap { queue =>
+      SignallingRef[F, Boolean](false) flatMap { termSignal =>
+      Queue.bounded[F, (ProduceRequest, Either[Throwable, Response] => F[Unit])](1) flatMap { queue =>
       Ref.of[F, Map[Int, (ProduceRequest, Either[Throwable, Response] => F[Unit])]](Map.empty) map { ref =>
 
         def registerMessage(in: (ProduceRequest, Either[Throwable, Response] => F[Unit]), idx: Int): F[RequestMessage] = {
@@ -777,14 +779,14 @@ object KafkaClient {
         // Message is processed from queue, then added to map of open messages and then send to server
         // this may only finish when either broker closes connection or fails.
         def leaderAvailable(leader: BrokerAddress): Stream[F, Unit] = {
-          Logger[F].info2(s"Leader available for publishing to $topicId[$partition] : $leader") >>
+          Stream.eval(Log[F].info(s"Leader available for publishing to topic", Detail(topicId) and partition and leader)) >>
           (((queue.dequeue.zip(indexer) evalMap (registerMessage _ tupled)) through connection(leader)) flatMap { response =>
             Stream.eval(getRequest(response)) flatMap {
               case Some((req, cb)) =>
                 response match {
                   case ResponseMessage(_, produceResp: ProduceResponse) =>
                     produceResp.data.find(_._1 == topicId).flatMap(_._2.find(_._1 == partition)) match {
-                      case None => Stream.raiseError(UnexpectedResponse(leader, response))
+                      case None => Stream.raiseError[F](UnexpectedResponse(leader, response))
 
                       case Some((_, result)) => result.error match {
                         case None => Stream.eval_(cb(Right(Some((result.offset, result.time)))))
@@ -792,13 +794,13 @@ object KafkaClient {
                       }
                     }
 
-                  case _ => Stream.raiseError(UnexpectedResponse(leader, response))
+                  case _ => Stream.raiseError[F](UnexpectedResponse(leader, response))
                 }
 
               case None =>
-                Stream.raiseError(UnexpectedResponse(leader, response))
+                Stream.raiseError[F](UnexpectedResponse(leader, response))
             }
-          }) ++ Stream.raiseError(new Throwable("Broker terminated connection")) // the first part of the stream shall never terminate unless broker terminates connection, which we convert to failure
+          }) ++ Stream.raiseError[F](new Throwable("Broker terminated connection")) // the first part of the stream shall never terminate unless broker terminates connection, which we convert to failure
         }
 
         val getLeader: Stream[F, Option[BrokerAddress]] =
@@ -808,8 +810,8 @@ object KafkaClient {
         // each `getLeaderDelay` this refreshes new known metadata and once leader is knwon for given topic/partition
         // this will terminate with leader address
         def leaderUnavailable: Stream[F, BrokerAddress] = {
-          Logger[F].error2(s"Leader unavailable for publishing to $topicId[$partition]") >> {
-            Stream.eval(async.signalOf[F, Option[BrokerAddress]](None)) flatMap { leaderSignal =>
+          Stream.eval(Log[F].error(s"Leader unavailable for publishing to topic", Detail(topicId) and partition)) >> {
+            Stream.eval(SignallingRef[F, Option[BrokerAddress]](None)) flatMap { leaderSignal =>
               val cancelIncoming = queue.dequeue.evalMap { case (_, cb) => cb(Left(LeaderNotAvailable(topicId, partition))) } drain
               val queryLeader = ((Stream.awakeEvery[F](getLeaderDelay) >> getLeader) evalMap { r => leaderSignal.set (r) }) drain
 
@@ -819,7 +821,7 @@ object KafkaClient {
               (leaderSignal.discrete.take(1) flatMap {
                 case None => leaderUnavailable // impossible
                 case Some(leader) =>
-                  Logger[F].debug2(s"Publisher got leader for $topicId[$partition]: $leader") >> Stream.emit(leader)
+                  Stream.eval(Log[F].debug(s"Publisher got leader for topic", Detail(leader) and topicId and partition)) >> Stream.emit(leader)
               })
             }
           }
@@ -839,7 +841,7 @@ object KafkaClient {
                 case Some(failedBrokerAddress) if leader == failedBrokerAddress =>
                   // this indicates that cluster sill thinks the leader is same as the one that failed us, for that reason
                   // we have to suspend execution for while and retry in FiniteDuration
-                  Logger[F].warn2(s"New elected leader is same like the old one ($leader), awaiting next leader: $topicId[$partition], currently unavailable") >>
+                  Stream.eval(Log[F].warn(s"New elected leader is same like the old one, awaiting next leader", Detail(leader) and topicId and partition)) >>
                   leaderUnavailable flatMap { leader => runner(None, Stream(Some(leader))) }
 
                 case _ =>
@@ -847,7 +849,7 @@ object KafkaClient {
                   // so when that happens, all open requests are completed and runner is rerun to switch likely to leaderUnavailable.
                   // as the last action runner is restarted
                   leaderAvailable(leader) handleErrorWith  { failure =>
-                    Logger[F].error2(s"Failure of publishing connection to $topicId[$partition] at broker $leader", failure) >>
+                    Stream.eval(Log[F].error(s"Failure of publishing connection to broker", Detail(leader) and topicId and partition, Some(failure))) >>
                     Stream.eval(completeNotProcessed(failure)) >>
                     runner(Some(leader), getLeader)
                   }
@@ -860,14 +862,14 @@ object KafkaClient {
         new PartitionPublishConnection[F] {
 
           def run: F[Unit] =
-            Logger[F].info(s"Starting publish connection for $topicId[$partition]") *>
+            Log[F].info(s"Starting publish connection", Detail(topicId) and partition) *>
             (runner(None, getLeader) interruptWhen termSignal).compile.drain.attempt flatMap { r =>
               completeNotProcessed(r.left.toOption.getOrElse(ClientTerminated)) *>
-              Logger[F].info(s"Publish connection for $topicId[$partition] terminated: $r")
+              Log[F].info(s"Publish connection terminated", Detail(topicId) and partition, r.left.toOption)
             }
 
           def shutdown: F[Unit] =
-            Logger[F].info(s"Shutting-down publish connection for $topicId[$partition]") *> termSignal.set(true)
+            Log[F].info(s"Shutting-down publish connection", Detail(topicId) and partition) *> termSignal.set(true)
 
           def publish(messages: Vector[Message], timeout: FiniteDuration, acks: RequiredAcks.Value): F[Option[(Long @@ Offset, Option[Date])]] = {
             Deferred[F, Either[Throwable, Response]] flatMap { promise =>
@@ -971,7 +973,7 @@ object KafkaClient {
       * @tparam F
       * @return
       */
-    def leadersDiscrete[F[_] : Concurrent : Timer : Logger](
+    def leadersDiscrete[F[_] : Concurrent : Timer : Log](
       metaRequestConnection: BrokerAddress => Pipe[F, MetadataRequest, MetadataResponse]
       , seed: Seq[BrokerAddress]
       , delay: FiniteDuration
@@ -989,11 +991,11 @@ object KafkaClient {
         remains.headOption match {
           case None =>
             if (success) go(seed, success = false)
-            else Stream.raiseError(NoBrokerAvailable)
+            else Stream.raiseError[F](NoBrokerAvailable)
 
           case Some(broker) =>
             Stream.eval(Ref.of[F, Boolean](success)) flatMap { successRef =>
-              ((Stream.eval(async.boundedQueue[F, MetadataRequest](1)) flatMap { requestQ =>
+              ((Stream.eval(Queue.bounded[F, MetadataRequest](1)) flatMap { requestQ =>
               Stream.eval(requestQ.enqueue1(metaRq)) >>
                 (requestQ.dequeue through metaRequestConnection(broker)) flatMap { response =>
                   // we will here process the brokers and topics, and schedule next request after a given timeout
@@ -1002,9 +1004,9 @@ object KafkaClient {
                   Stream.sleep_(delay) ++
                   Stream.eval_(requestQ.enqueue1(metaRq))
                 }
-              }) ++ Stream.raiseError(new Throwable(s"Broker Terminated connection early while monitoring for leader: $broker"))) handleErrorWith  { failure =>
+              }) ++ Stream.raiseError[F](new Throwable(s"Broker Terminated connection early while monitoring for leader: $broker"))) handleErrorWith  { failure =>
                 Stream.eval(successRef.get) flatMap { onceOk =>
-                  Logger[F].error2(s"Broker terminated early while fetching metadata update (onceOk: $onceOk)", failure) >>
+                  Stream.eval(Log[F].error(s"Broker terminated early while fetching metadata update" , Detail(onceOk),  Some(failure))) >>
                   go(remains.tail, onceOk)
                 }
               }

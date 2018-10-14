@@ -3,13 +3,14 @@ package spinoco.fs2
 
 import java.nio.channels.AsynchronousChannelGroup
 
+import cats.Show
 import cats.effect.{ConcurrentEffect, Timer}
 import fs2._
 import scodec.bits.ByteVector
 import shapeless.tag
 import shapeless.tag._
-
 import spinoco.fs2.kafka.network.BrokerAddress
+import spinoco.fs2.log.Log
 import spinoco.protocol.kafka.{Offset, PartitionId, ProtocolVersion, TopicName}
 
 
@@ -49,7 +50,7 @@ package object kafka {
     *                     - control : Control connection where publish requests and maetadat requests are sent to
     *                     - fetch: Connection where fetch requests are sent to.
     */
-  def client[F[_] : Logger : ConcurrentEffect : Timer](
+  def client[F[_] : Log : ConcurrentEffect : Timer](
     ensemble: Set[BrokerAddress]
     , protocol: ProtocolVersion.Value
     , clientName: String
@@ -74,5 +75,11 @@ package object kafka {
 
   /** syntax helper to construct broker address **/
   def broker(host: String, port: Int): BrokerAddress = BrokerAddress(host, port)
+
+  private[kafka] implicit val topicNameShowInstance: Show[String @@ TopicName] =
+    Show.show(name => name: String)
+
+  private[kafka] implicit val partitionIdShowInstance: Show[Int @@ PartitionId] =
+    Show.fromToString
 
 }
