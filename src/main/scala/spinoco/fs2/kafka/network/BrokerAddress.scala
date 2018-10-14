@@ -2,6 +2,7 @@ package spinoco.fs2.kafka.network
 
 import java.net.InetSocketAddress
 
+import cats.Show
 import cats.effect.Sync
 
 
@@ -17,6 +18,14 @@ case class BrokerAddress(
 
   def toInetSocketAddress[F[_] : Sync]: F[InetSocketAddress] =
     Sync[F].catchNonFatal { new InetSocketAddress(self.host, self.port) }
+
+}
+
+
+object BrokerAddress {
+
+  implicit val showInstance: Show[BrokerAddress] =
+    Show.show { addr => s"${addr.host}:${addr.port}" }
 
 }
 

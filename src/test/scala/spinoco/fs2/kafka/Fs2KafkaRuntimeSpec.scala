@@ -10,6 +10,7 @@ import scodec.bits.ByteVector
 import shapeless.tag
 import shapeless.tag.@@
 import spinoco.fs2.kafka.network.BrokerAddress
+import spinoco.fs2.log.{Log, StandardProviders}
 import spinoco.protocol.kafka.{Broker, PartitionId, ProtocolVersion, TopicName}
 
 import scala.sys.process.{Process, ProcessLogger}
@@ -73,10 +74,10 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   val localCluster = Set(localBroker1_9092, localBroker2_9192, localBroker3_9292)
 
-  implicit lazy val logger: Logger[IO] = new Logger[IO] {
-    def log(level: Logger.Level.Value, msg: => String, throwable: Throwable): IO[Unit] =
-      IO { println(s"LOGGER: $level: $msg"); if (throwable != null) throwable.printStackTrace() }
-  }
+  implicit lazy val log: Log[IO] =
+    StandardProviders.console[IO](Log.Level.Trace).flatMap { implicit provider =>
+      Log.sync[IO]
+    }.use(log => IO(log)).unsafeRunSync()  // we cheat here hence we know the console and sync log are pure, os no cleanups called.
 
 
 
@@ -300,7 +301,6 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   def publishNMessages(client: KafkaClient[IO],from: Int, to: Int, quorum: Boolean = false): IO[Unit] = {
 
     Stream.range(from, to).evalMap { idx =>
-      println(s"publishing $idx")
       client.publish1(testTopicA, part0, ByteVector(1),  ByteVector(idx), quorum, 10.seconds)
     }
     .compile.drain
@@ -316,7 +316,6 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   def killLeader(client: KafkaClient[IO], nodes: KafkaNodes, topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[IO, Nothing] = {
     client.leaderFor(500.millis)(topic).take(1) map { _((topic, partition)) } flatMap { leader =>
-      println(s"KILLING LEADER: $leader")
       leader match {
         case BrokerAddress(_, 9092) => Stream.eval_(killImage(nodes.nodes(tag[Broker](1))))
         case BrokerAddress(_, 9192) => Stream.eval_(killImage(nodes.nodes(tag[Broker](2))))
