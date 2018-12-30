@@ -4,7 +4,7 @@ package spinoco.fs2
 import java.nio.channels.AsynchronousChannelGroup
 
 import cats.Show
-import cats.effect.{ConcurrentEffect, Timer}
+import cats.effect.{ConcurrentEffect, ContextShift, Timer}
 import fs2._
 import scodec.bits.ByteVector
 import shapeless.tag
@@ -50,7 +50,7 @@ package object kafka {
     *                     - control : Control connection where publish requests and maetadat requests are sent to
     *                     - fetch: Connection where fetch requests are sent to.
     */
-  def client[F[_] : Log : ConcurrentEffect : Timer](
+  def client[F[_] : Log : ConcurrentEffect : Timer: ContextShift](
     ensemble: Set[BrokerAddress]
     , protocol: ProtocolVersion.Value
     , clientName: String

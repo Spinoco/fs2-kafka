@@ -29,8 +29,8 @@ lazy val commonSettings = Seq(
     compilerPlugin("org.scalamacros" % "paradise" % "2.1.0" cross CrossVersion.full)
     , "org.scalatest" %% "scalatest" % "3.0.0" % "test"
     , "org.scalacheck" %% "scalacheck" % "1.13.4" % "test"
-    , "co.fs2" %% "fs2-core" % "1.0.0"
-    , "co.fs2" %% "fs2-io" % "1.0.0"
+    , "co.fs2" %% "fs2-core" % "1.0.2"
+    , "co.fs2" %% "fs2-io" % "1.0.2"
     , "com.spinoco" %% "protocol-kafka" % "0.3.15"
     , "com.spinoco" %% "fs2-log-core" % "0.1.0"
    ),

@@ -5,7 +5,7 @@ import java.nio.channels.AsynchronousChannelGroup
 
 import cats.syntax.all._
 import cats.{Applicative, Monad}
-import cats.effect.{ConcurrentEffect, Timer}
+import cats.effect.{ConcurrentEffect, ContextShift, Timer}
 import cats.effect.concurrent.Ref
 import fs2._
 import fs2.Stream._
@@ -41,13 +41,13 @@ object BrokerConnection {
     * @tparam F
     * @return
     */
-  def apply[F[_] : ConcurrentEffect : Timer](
+  def apply[F[_] : ConcurrentEffect : Timer: ContextShift](
     address: InetSocketAddress
     , writeTimeout: Option[FiniteDuration] = None
     , readMaxChunkSize: Int = 256 * 1024      // 256 Kilobytes
   )(implicit AG:AsynchronousChannelGroup): Pipe[F, RequestMessage, ResponseMessage] = {
     (source: Stream[F,RequestMessage]) =>
-      Stream.resource(fs2.io.tcp.client[F](address)).flatMap { socket =>
+      Stream.resource(fs2.io.tcp.Socket.client[F](address)).flatMap { socket =>
         eval(Ref.of(Map.empty[Int,RequestMessage])).flatMap { openRequests =>
           val send = source.through(impl.sendMessages(
             openRequests = openRequests

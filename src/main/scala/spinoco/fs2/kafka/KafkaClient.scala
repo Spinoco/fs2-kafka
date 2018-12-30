@@ -6,7 +6,7 @@ import java.util.Date
 
 import cats.Applicative
 import cats.effect.concurrent.{Deferred, Ref}
-import cats.effect.{Concurrent, ConcurrentEffect, Sync, Timer}
+import cats.effect._
 import cats.kernel.Eq
 import cats.implicits._
 import fs2._
@@ -211,7 +211,7 @@ object KafkaClient {
     *
     * @see [[spinoco.fs2.kafka.client]]
     */
-  def apply[F[_] : ConcurrentEffect : Timer : Log](
+  def apply[F[_] : ConcurrentEffect : Timer : Log: ContextShift](
     ensemble: Set[BrokerAddress]
     , protocol: ProtocolVersion.Value
     , clientName: String
