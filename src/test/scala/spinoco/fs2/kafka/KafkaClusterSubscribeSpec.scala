@@ -71,7 +71,7 @@ class KafkaClusterSubscribeSpec extends Fs2KafkaRuntimeSpec {
               Stream.eval_(publishNMessages(kc, 20, 30, quorum = true))
           ).parJoinUnbounded
         }}.take(30)
-      }.compile.toVector.unsafeRunTimed(180.seconds).map { _.map { _.copy(tail = offset(30)) } } shouldBe Some(generateTopicMessages(0, 30, 30))
+      }.compile.toVector.unsafeRunTimed(240.seconds).map { _.map { _.copy(tail = offset(30)) } } shouldBe Some(generateTopicMessages(0, 30, 30))
 
     }
   }
