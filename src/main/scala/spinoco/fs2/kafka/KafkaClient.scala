@@ -204,8 +204,9 @@ object KafkaClient {
     * @param brokerWriteTimeout       Timeout to complete single write (tcp) operation to broker before failing it.
     * @param queryOffsetTimeout       Timeout to query any partition offset.
     * @param brokerReadMaxChunkSize   Max size of chunk that is read in single tcp operation from broker
-    * @param getLeaderDelay           How often re-query for leader if the leader is not known. Applies only for publish conmections.
+    * @param getLeaderDelay           How often re-query for leader if the leader is not known. Applies only for publish connections.
     * @param brokerControlQueueBound  Max number of unprocessed messages to keep for broker, before stopping accepting new messages for broker.
+    * @param brokerMetadataReadTimeout Maximum time we can take to read response from broker to a metadata request.
     *
     * @see [[spinoco.fs2.kafka.client]]
     */
@@ -219,18 +220,19 @@ object KafkaClient {
     , brokerReadMaxChunkSize: Int = 256 * 1024
     , getLeaderDelay: FiniteDuration = 3.seconds
     , brokerControlQueueBound: Int = 10 * 1000
+    , brokerMetadataReadTimeout: Option[FiniteDuration] = Some(10.seconds)
   )(implicit AG: AsynchronousChannelGroup): Stream[F,KafkaClient[F]] = {
 
-    def brokerConnection(addr: BrokerAddress):Pipe[F,RequestMessage,ResponseMessage] = s =>
+    def brokerConnection(addr: BrokerAddress, readTimeout: Option[FiniteDuration]):Pipe[F,RequestMessage,ResponseMessage] = s =>
       Stream.eval(addr.toInetSocketAddress[F]).flatMap { inetSocketAddress =>
-        s through BrokerConnection[F](inetSocketAddress, brokerWriteTimeout, brokerReadMaxChunkSize)
+        s through BrokerConnection[F](inetSocketAddress, brokerWriteTimeout, readTimeout, brokerReadMaxChunkSize)
       }
 
-    val fetchMeta = impl.requestReplyBroker[F, Request.MetadataRequest, Response.MetadataResponse](brokerConnection, protocol, s"$clientName-meta-rq") _
+    val fetchMeta = impl.requestReplyBroker[F, Request.MetadataRequest, Response.MetadataResponse](brokerConnection(_, brokerMetadataReadTimeout), protocol, s"$clientName-meta-rq") _
 
     def publishConnection(topicId: String @@ TopicName, partitionId: Int @@ PartitionId): F[PartitionPublishConnection[F]] = {
       impl.publishLeaderConnection(
-        connection = brokerConnection
+        connection = brokerConnection(_, None) // publish connection has no read timeout as we control the timeouts via writes. // TODO We should control timeouts in request - reply fasion.
         , protocol = protocol
         , clientId = s"$clientName-produce"
         , getLeaderFor = impl.leaderFor(fetchMeta, ensemble.toSeq)
@@ -246,8 +248,8 @@ object KafkaClient {
       , publishConnection = publishConnection
       , fetchMetadata = fetchMeta
       , fetchConnection = impl.fetchBrokerConnection(brokerConnection, protocol, s"$clientName-fetch")
-      , offsetConnection =  impl.offsetConnection(brokerConnection, protocol, s"$clientName-offset")
-      , metaRequestConnection = impl.metadataConnection(brokerConnection, protocol, s"$clientName-meta")
+      , offsetConnection =  impl.offsetConnection(brokerConnection(_, Some(queryOffsetTimeout)), protocol, s"$clientName-offset")
+      , metaRequestConnection = impl.metadataConnection(brokerConnection(_, brokerMetadataReadTimeout), protocol, s"$clientName-meta")
       , queryOffsetTimeout = queryOffsetTimeout
       , protocol = protocol
     ))({ case (_, shutdown) => shutdown }).map(_._1)
@@ -279,7 +281,7 @@ object KafkaClient {
       ensemble: Set[BrokerAddress]
       , publishConnection: (String @@ TopicName, Int @@ PartitionId) => F[PartitionPublishConnection[F]]
       , fetchMetadata: (BrokerAddress, MetadataRequest) => F[MetadataResponse]
-      , fetchConnection : BrokerAddress => Pipe[F, FetchRequest, (FetchRequest, FetchResponse)]
+      , fetchConnection : (BrokerAddress, FiniteDuration)=> Pipe[F, FetchRequest, (FetchRequest, FetchResponse)]
       , offsetConnection : BrokerAddress => Pipe[F, OffsetsRequest, OffsetResponse]
       , metaRequestConnection: BrokerAddress => Pipe[F, MetadataRequest, MetadataResponse]
       , queryOffsetTimeout: FiniteDuration
@@ -430,15 +432,15 @@ object KafkaClient {
       * @param address           Address of broker.
       */
     def fetchBrokerConnection[F[_] : Concurrent](
-     brokerConnection : BrokerAddress => Pipe[F, RequestMessage, ResponseMessage]
+     brokerConnection : (BrokerAddress, Option[FiniteDuration]) => Pipe[F, RequestMessage, ResponseMessage]
      , version: ProtocolVersion.Value
      , clientId: String
-    )(address: BrokerAddress): Pipe[F, FetchRequest, (FetchRequest, FetchResponse)] = { s =>
+    )(address: BrokerAddress, readTimeout: FiniteDuration): Pipe[F, FetchRequest, (FetchRequest, FetchResponse)] = { s =>
       Stream.eval(async.signalOf[F, Map[Int, FetchRequest]](Map.empty)).flatMap { openRequestSignal =>
         s.zip(indexer[F]).evalMap { case (request, idx) =>
           openRequestSignal.update(_ + (idx -> request)) as RequestMessage(version, idx, clientId, request)
-        }
-        .through(brokerConnection(address)).evalMap { resp => resp.response match {
+        } // Adding 5 second to the read timeout to make sure we compensate for overheads.
+        .through(brokerConnection(address, Some(readTimeout + 5.second))).evalMap { resp => resp.response match {
           case fetch: FetchResponse =>
             openRequestSignal.get.map { _.get(resp.correlationId) }.flatMap {
               case Some(req) => openRequestSignal.update(_ - resp.correlationId) as ((req, fetch))
@@ -513,7 +515,7 @@ object KafkaClient {
       , maxChunkByteSize: Int
       , maxWaitTime     : FiniteDuration
       , protocol        : ProtocolVersion.Value
-      , fetchConnection : BrokerAddress => Pipe[F, FetchRequest, (FetchRequest, FetchResponse)]
+      , fetchConnection : (BrokerAddress, FiniteDuration) => Pipe[F, FetchRequest, (FetchRequest, FetchResponse)]
       , getLeader       : (String @@ TopicName, Int @@ PartitionId) => F[Option[BrokerAddress]]
       , queryOffsetRange : (String @@ TopicName, Int @@ PartitionId) => F[(Long @@ Offset, Long @@ Offset)]
       , leaderFailureTimeout: FiniteDuration
@@ -548,7 +550,7 @@ object KafkaClient {
             }
 
             (Stream.eval(requestNextChunk) flatMap { thisChunkStart =>
-            (requestQueue.dequeue through fetchConnection (broker)) flatMap { case (request, fetch) =>
+            (requestQueue.dequeue through fetchConnection(broker, maxWaitTime)) flatMap { case (request, fetch) =>
               fetch.data.find(_._1 == topicId).flatMap(_._2.find(_.partitionId == partition)) match {
                 case None =>
                   Stream.raiseError(InvalidBrokerResponse(broker, "FetchResponse", request, Some(fetch)))

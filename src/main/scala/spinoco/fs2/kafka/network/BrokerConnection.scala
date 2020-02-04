@@ -44,6 +44,7 @@ object BrokerConnection {
   def apply[F[_] : ConcurrentEffect : Timer](
     address: InetSocketAddress
     , writeTimeout: Option[FiniteDuration] = None
+    , readTimeout: Option[FiniteDuration] = None
     , readMaxChunkSize: Int = 256 * 1024      // 256 Kilobytes
   )(implicit AG:AsynchronousChannelGroup): Pipe[F, RequestMessage, ResponseMessage] = {
     (source: Stream[F,RequestMessage]) =>
@@ -55,7 +56,7 @@ object BrokerConnection {
           ))
 
           val receive =
-            socket.reads(readMaxChunkSize, timeout = None)
+            socket.reads(readMaxChunkSize, timeout = readTimeout)
             .through(impl.receiveMessages(
               openRequests = openRequests
             ))
