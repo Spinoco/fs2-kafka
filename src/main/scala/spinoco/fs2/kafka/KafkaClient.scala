@@ -1,19 +1,18 @@
 package spinoco.fs2.kafka
 
-import java.nio.channels.AsynchronousChannelGroup
+import java.nio.channels.{AsynchronousChannelGroup, InterruptedByTimeoutException}
 import java.time.LocalDateTime
 import java.util.Date
 
 import cats.Applicative
 import cats.effect.concurrent.{Deferred, Ref}
-import cats.effect.{Concurrent, ConcurrentEffect, Sync, Timer}
+import cats.effect.{Concurrent, ConcurrentEffect, Fiber, Sync, Timer}
 import cats.kernel.Eq
 import cats.syntax.all._
 import fs2._
 import scodec.bits.ByteVector
 import shapeless.{Typeable, tag}
 import shapeless.tag._
-
 import spinoco.fs2.kafka.KafkaClient.impl.PartitionPublishConnection
 import spinoco.fs2.kafka.failure._
 import spinoco.fs2.kafka.network.{BrokerAddress, BrokerConnection}
@@ -21,6 +20,7 @@ import spinoco.protocol.kafka.Message.SingleMessage
 import spinoco.protocol.kafka.Request._
 import spinoco.protocol.kafka.{ProtocolVersion, Request, _}
 import spinoco.protocol.kafka.Response._
+
 import scala.concurrent.duration._
 /**
   * Client that binds to kafka broker. Usually application need only one client.
@@ -743,10 +743,22 @@ object KafkaClient {
       type Response = Option[(Long @@ Offset, Option[Date])]
       async.signalOf[F, Boolean](false) flatMap { termSignal =>
       async.boundedQueue[F, (ProduceRequest, Either[Throwable, Response] => F[Unit])](1) flatMap { queue =>
-      Ref.of[F, Map[Int, (ProduceRequest, Either[Throwable, Response] => F[Unit])]](Map.empty) map { ref =>
+      Ref.of[F, Map[Int, (ProduceRequest, Either[Throwable, Response] => F[Unit], Fiber[F, Unit])]](Map.empty) map { ref =>
 
-        def registerMessage(in: (ProduceRequest, Either[Throwable, Response] => F[Unit]), idx: Int): F[RequestMessage] = {
+        def registerMessage(
+          terminateConnection: Deferred[F, Throwable]
+        )(in: (ProduceRequest, Either[Throwable, Response] => F[Unit]), idx: Int): F[RequestMessage] = {
+
           val (produce, cb) = in
+
+          def runResponseTimeout: F[Fiber[F, Unit]] = {
+            Concurrent[F].start(
+              Concurrent[F].race(
+                Timer[F].sleep(produce.timeout + 1.seconds) >> terminateConnection.complete(new InterruptedByTimeoutException())
+                , terminateConnection.get
+              ).void
+            )
+          }
 
           val msg = RequestMessage(
             version = protocol
@@ -757,11 +769,14 @@ object KafkaClient {
 
           produce.requiredAcks match {
             case RequiredAcks.NoResponse => cb(Right(None)) as msg
-            case _ => ref.update { _ + (idx -> ((produce, cb))) } as msg
+            case _ =>
+              runResponseTimeout.flatMap { readTimeoutFiber =>
+                ref.update { _ + (idx -> ((produce, cb, readTimeoutFiber))) } as msg
+              }
           }
         }
 
-        def getRequest(response: ResponseMessage): F[Option[(ProduceRequest, Either[Throwable, Response] => F[Unit])]] = {
+        def getRequest(response: ResponseMessage): F[Option[(ProduceRequest, Either[Throwable, Response] => F[Unit], Fiber[F, Unit])]] = {
           ref.modify { m => (m - response.correlationId, m.get(response.correlationId)) }
         }
 
@@ -780,17 +795,20 @@ object KafkaClient {
         // this may only finish when either broker closes connection or fails.
         def leaderAvailable(leader: BrokerAddress): Stream[F, Unit] = {
           Logger[F].info2(s"Leader available for publishing to $topicId[$partition] : $leader") >>
-          (((queue.dequeue.zip(indexer) evalMap (registerMessage _ tupled)) through connection(leader)) flatMap { response =>
+          Stream.eval(Deferred[F, Throwable]).flatMap { connectionTimeout =>
+          ((queue.dequeue.zip(indexer) evalMap (registerMessage(connectionTimeout) _ tupled)) through connection(leader)).flatMap { response =>
             Stream.eval(getRequest(response)) flatMap {
-              case Some((req, cb)) =>
+              case Some((req, cb, readTimeoutFiber)) =>
                 response match {
                   case ResponseMessage(_, produceResp: ProduceResponse) =>
-                    produceResp.data.find(_._1 == topicId).flatMap(_._2.find(_._1 == partition)) match {
-                      case None => Stream.raiseError(UnexpectedResponse(leader, response))
+                    Stream.eval(readTimeoutFiber.cancel) >> {
+                      produceResp.data.find(_._1 == topicId).flatMap(_._2.find(_._1 == partition)) match {
+                        case None => Stream.raiseError(UnexpectedResponse(leader, response))
 
-                      case Some((_, result)) => result.error match {
-                        case None => Stream.eval_(cb(Right(Some((result.offset, result.time)))))
-                        case Some(err) => Stream.eval_(cb(Left(BrokerReportedFailure(leader, req, err))))
+                        case Some((_, result)) => result.error match {
+                          case None => Stream.eval_(cb(Right(Some((result.offset, result.time)))))
+                          case Some(err) => Stream.eval_(cb(Left(BrokerReportedFailure(leader, req, err))))
+                        }
                       }
                     }
 
@@ -800,7 +818,8 @@ object KafkaClient {
               case None =>
                 Stream.raiseError(UnexpectedResponse(leader, response))
             }
-          }) ++ Stream.raiseError(new Throwable("Broker terminated connection")) // the first part of the stream shall never terminate unless broker terminates connection, which we convert to failure
+          }.interruptWhen(connectionTimeout.get.map(Either.left[Throwable, Unit](_)))} ++
+          Stream.raiseError(new Throwable("Broker terminated connection")) // the first part of the stream shall never terminate unless broker terminates connection, which we convert to failure
         }
 
         val getLeader: Stream[F, Option[BrokerAddress]] =
