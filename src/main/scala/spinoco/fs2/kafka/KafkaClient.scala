@@ -249,7 +249,7 @@ object KafkaClient {
       , fetchMetadata = fetchMeta
       , fetchConnection = impl.fetchBrokerConnection(brokerConnection, protocol, s"$clientName-fetch")
       , offsetConnection =  impl.offsetConnection(brokerConnection(_, Some(queryOffsetTimeout)), protocol, s"$clientName-offset")
-      , metaRequestConnection = impl.metadataConnection(brokerConnection(_, brokerMetadataReadTimeout), protocol, s"$clientName-meta")
+      , metaRequestConnection = impl.metadataConnection(brokerConnection(_, None), protocol, s"$clientName-meta")
       , queryOffsetTimeout = queryOffsetTimeout
       , protocol = protocol
     ))({ case (_, shutdown) => shutdown }).map(_._1)
