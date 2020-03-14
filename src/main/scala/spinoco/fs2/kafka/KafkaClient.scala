@@ -252,6 +252,7 @@ object KafkaClient {
       , metaRequestConnection = impl.metadataConnection(brokerConnection(_, None), protocol, s"$clientName-meta")
       , queryOffsetTimeout = queryOffsetTimeout
       , protocol = protocol
+      , brokerMetadataReadTimeout = brokerMetadataReadTimeout
     ))({ case (_, shutdown) => shutdown }).map(_._1)
   }
 
@@ -286,6 +287,7 @@ object KafkaClient {
       , metaRequestConnection: BrokerAddress => Pipe[F, MetadataRequest, MetadataResponse]
       , queryOffsetTimeout: FiniteDuration
       , protocol: ProtocolVersion.Value
+      , brokerMetadataReadTimeout: Option[FiniteDuration]
     ): F[(KafkaClient[F], F[Unit])] =  {
       mkPublishers(publishConnection) map { publisher =>
 
@@ -367,6 +369,7 @@ object KafkaClient {
               , seed = ensemble.toSeq
               , delay = delay
               , topics = Vector.empty
+              , brokerMetadataReadTimeout = brokerMetadataReadTimeout
             )
 
 
@@ -376,6 +379,7 @@ object KafkaClient {
               , seed = ensemble.toSeq
               , delay = delay
               , topics = Vector(topic) ++ topics
+              , brokerMetadataReadTimeout = brokerMetadataReadTimeout
             )
 
         }
@@ -997,6 +1001,7 @@ object KafkaClient {
       , seed: Seq[BrokerAddress]
       , delay: FiniteDuration
       , topics: Vector[String @@ TopicName]
+      , brokerMetadataReadTimeout: Option[FiniteDuration]
     ): Stream[F, Map[(String @@ TopicName, Int @@ PartitionId), BrokerAddress]] = {
       val metaRq = MetadataRequest(topics)
 
@@ -1006,6 +1011,30 @@ object KafkaClient {
         (resp.topics flatMap { tp => tp.partitions flatMap { p => p.leader flatMap { brokersById.get } map { ((tp.name, p.id), _) } } }).toMap
       }
 
+      // Register a timeout for reading response from kafka.
+      def registerTimeout(
+        interruptFiber: Ref[F, Option[Fiber[F, Unit]]]
+        , interrupt: Deferred[F, Throwable]
+      ): F[Unit] = {
+        brokerMetadataReadTimeout match {
+          case None => Applicative[F].unit
+          case Some(timeout) =>
+            Concurrent[F].start(
+              Timer[F].sleep(timeout) >>
+                interrupt.complete(new InterruptedByTimeoutException())
+            ).flatMap { fiber => interruptFiber.modify(s => Some(fiber) -> s)}
+            .flatMap(_.fold(Applicative[F].unit)(_.cancel))
+        }
+      }
+
+      // Cancels the timeout for reading from kafka.
+      def cancelTimeout(
+        interruptFiber: Ref[F, Option[Fiber[F, Unit]]]
+      ): F[Unit] = {
+        interruptFiber.modify(current => (None, current))
+        .flatMap(_.fold(Applicative[F].unit)(_.cancel))
+      }
+
       def go(remains: Seq[BrokerAddress], success: Boolean): Stream[F, Map[(String @@ TopicName, Int @@ PartitionId), BrokerAddress]] = {
         remains.headOption match {
           case None =>
@@ -1013,23 +1042,29 @@ object KafkaClient {
             else Stream.raiseError(NoBrokerAvailable)
 
           case Some(broker) =>
-            Stream.eval(Ref.of[F, Boolean](success)) flatMap { successRef =>
+            Stream.eval(Deferred[F, Throwable]).flatMap { timeoutInterrupt =>
+            Stream.eval(Ref.of[F, Option[Fiber[F, Unit]]](None)).flatMap { interruptFiber =>
+            Stream.eval(Ref.of[F, Boolean](success)).flatMap { successRef =>
               ((Stream.eval(async.boundedQueue[F, MetadataRequest](1)) flatMap { requestQ =>
               Stream.eval(requestQ.enqueue1(metaRq)) >>
-                (requestQ.dequeue through metaRequestConnection(broker)) flatMap { response =>
+                requestQ.dequeue
+                .evalTap(_ => registerTimeout(interruptFiber, timeoutInterrupt))
+                .through(metaRequestConnection(broker))
+                .flatMap { response =>
                   // we will here process the brokers and topics, and schedule next request after a given timeout
+                  Stream.eval_(cancelTimeout(interruptFiber)) ++
                   Stream.eval_(successRef.set(true)) ++
                   Stream.emit(buildMap(response)) ++
                   Stream.sleep_(delay) ++
                   Stream.eval_(requestQ.enqueue1(metaRq))
-                }
+                }.interruptWhen(timeoutInterrupt.get.map(Either.left[Throwable, Unit](_)))
               }) ++ Stream.raiseError(new Throwable(s"Broker Terminated connection early while monitoring for leader: $broker"))) handleErrorWith  { failure =>
                 Stream.eval(successRef.get) flatMap { onceOk =>
                   Logger[F].error2(s"Broker terminated early while fetching metadata update (onceOk: $onceOk)", failure) >>
                   go(remains.tail, onceOk)
                 }
               }
-            }
+            }}}
 
         }
       }
