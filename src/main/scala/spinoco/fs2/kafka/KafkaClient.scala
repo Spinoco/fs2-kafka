@@ -603,7 +603,10 @@ object KafkaClient {
                   case Left(err) => tryRecover(err)
                 }
 
-              case other => tryRecover(err)
+              case ErrorType.NOT_LEADER_FOR_PARTITION | ErrorType.LEADER_NOT_AVAILABLE =>
+                start
+
+              case _ => tryRecover(err)
             }
 
             case other => tryRecover(other)
