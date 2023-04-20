@@ -207,6 +207,8 @@ object KafkaClient {
     * @param getLeaderDelay           How often re-query for leader if the leader is not known. Applies only for publish connections.
     * @param brokerControlQueueBound  Max number of unprocessed messages to keep for broker, before stopping accepting new messages for broker.
     * @param brokerMetadataReadTimeout Maximum time we can take to read response from broker to a metadata request.
+    * @param publishFailMaxAttempts   Max number of attempts when publish to a topic fails, this is usually caused
+    *                                 by kafka leader change.
     *
     * @see [[spinoco.fs2.kafka.client]]
     */
@@ -221,6 +223,7 @@ object KafkaClient {
     , getLeaderDelay: FiniteDuration = 3.seconds
     , brokerControlQueueBound: Int = 10 * 1000
     , brokerMetadataReadTimeout: Option[FiniteDuration] = Some(10.seconds)
+    , publishFailMaxAttempts: Int = 3
   )(implicit AG: AsynchronousChannelGroup): Stream[F,KafkaClient[F]] = {
 
     def brokerConnection(addr: BrokerAddress, readTimeout: Option[FiniteDuration]):Pipe[F,RequestMessage,ResponseMessage] = s =>
@@ -239,6 +242,7 @@ object KafkaClient {
         , getLeaderDelay = getLeaderDelay
         , topicId = topicId
         , partition = partitionId
+        , publishFailMaxAttempts = publishFailMaxAttempts
       )
     }
 
@@ -603,7 +607,7 @@ object KafkaClient {
                   case Left(err) => tryRecover(err)
                 }
 
-              case other => tryRecover(err)
+              case _ => tryRecover(err)
             }
 
             case other => tryRecover(other)
@@ -727,6 +731,7 @@ object KafkaClient {
     /**
       * With every leader for each topic and partition active this keeps connection open.
       * Connection is open once the topic and partition will get first produce request to serve.
+      *
       * @param connection     Function handling connection to Kafka Broker
       * @param topicId        Id of the topic
       * @param partition      Id of the partition
@@ -734,6 +739,8 @@ object KafkaClient {
       * @param clientId       Id of the client
       * @param getLeaderFor   Returns a leader for supplied topic and partition
       * @param getLeaderDelay Wait that much time to retry for new leader if leader is not known
+      * @param publishFailMaxAttempts Max number of attempts when publish to a topic fails, this is usually caused
+      *                               by kafka leader change.
       */
     def publishLeaderConnection[F[_] : Logger : Concurrent : Timer](
       connection: BrokerAddress => Pipe[F, RequestMessage, ResponseMessage]
@@ -743,6 +750,7 @@ object KafkaClient {
       , getLeaderDelay: FiniteDuration
       , topicId: String @@ TopicName
       , partition: Int @@ PartitionId
+      , publishFailMaxAttempts: Int = 3
     ) : F[PartitionPublishConnection[F]] = {
       type Response = Option[(Long @@ Offset, Option[Date])]
       async.signalOf[F, Boolean](false) flatMap { termSignal =>
@@ -895,20 +903,32 @@ object KafkaClient {
             Logger[F].info(s"Shutting-down publish connection for $topicId[$partition]") *> termSignal.set(true)
 
           def publish(messages: Vector[Message], timeout: FiniteDuration, acks: RequiredAcks.Value): F[Option[(Long @@ Offset, Option[Date])]] = {
-            Deferred[F, Either[Throwable, Response]] flatMap { promise =>
-              val request = ProduceRequest(
-                requiredAcks = acks
-                , timeout = timeout
-                , messages = Vector((topicId, Vector((partition, messages))))
-              )
+            // Publish the message and await result
+            def publish: F[Option[(Long @@ Offset, Option[Date])]] = {
+              Deferred[F, Either[Throwable, Response]] flatMap { promise =>
+                val request = ProduceRequest(
+                  requiredAcks = acks
+                  , timeout = timeout
+                  , messages = Vector((topicId, Vector((partition, messages))))
+                )
 
-              queue.enqueue1((request, promise.complete)) >> promise.get flatMap {
-                case Left(err) => Sync[F].raiseError(err)
-                case Right(r) => Applicative[F].pure(r)
+                queue.enqueue1((request, promise.complete)) >> promise.get flatMap {
+                  case Left(err) => Sync[F].raiseError(err)
+                  case Right(r) => Applicative[F].pure(r)
+                }
               }
-
             }
 
+            // Try to publish the message, in case of failure, wait and try again.
+            // This way we give kafka cluster time to reconcile in case of leader change.
+            def go(attemptNo: Int): F[Option[(Long @@ Offset, Option[Date])]] = {
+              publish.handleErrorWith { err =>
+                if (attemptNo >= publishFailMaxAttempts) Sync[F].raiseError(err)
+                else Timer[F].sleep(getLeaderDelay) >> go(attemptNo + 1)
+              }
+            }
+
+            go(0)
           }
         }
 
