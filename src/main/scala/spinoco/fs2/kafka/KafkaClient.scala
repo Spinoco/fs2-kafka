@@ -731,8 +731,8 @@ object KafkaClient {
     /**
       * With every leader for each topic and partition active this keeps connection open.
       * Connection is open once the topic and partition will get first produce request to serve.
-     *
-     * @param connection     Function handling connection to Kafka Broker
+      *
+      * @param connection     Function handling connection to Kafka Broker
       * @param topicId        Id of the topic
       * @param partition      Id of the partition
       * @param protocol       Protocol
