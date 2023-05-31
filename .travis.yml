@@ -1,6 +1,5 @@
 language : scala
 sudo: required
-dist: trusty
 
 services:
   - docker
