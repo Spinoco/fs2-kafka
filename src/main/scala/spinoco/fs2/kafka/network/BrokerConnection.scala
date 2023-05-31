@@ -61,7 +61,7 @@ object BrokerConnection {
               openRequests = openRequests
             ))
 
-          (send.drain.onFinalize(socket.endOfInput) mergeHaltBoth receive)
+          receive.concurrently(send.drain.onFinalize(socket.endOfInput))
         }
       }
   }
