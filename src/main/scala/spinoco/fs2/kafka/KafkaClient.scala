@@ -798,7 +798,16 @@ object KafkaClient {
 
                       case Some((_, result)) => result.error match {
                         case None => Stream.eval_(cb(Right(Some((result.offset, result.time)))))
-                        case Some(err) => Stream.eval_(cb(Left(BrokerReportedFailure(leader, req, err))))
+                        case Some(err @ ErrorType.NOT_LEADER_FOR_PARTITION) =>
+                          // When reply to the request notifies about wrong leader for partition
+                          // we need to terminate whole publish stream and let it refresh with a new leader.
+                          val replyError = BrokerReportedFailure(leader, req, err)
+
+                          Stream.eval_(cb(Left(replyError))) ++
+                          Stream.raiseError(replyError)
+
+                        case Some(err) =>
+                          Stream.eval_(cb(Left(BrokerReportedFailure(leader, req, err))))
                       }
                     }
 
