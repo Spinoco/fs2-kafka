@@ -13,31 +13,13 @@ jobs:
       fail-fast: false
       matrix:
         kafka-version:
-          - name: "Kafka 0.10.0"
-            runtime: "V_0_10_0"
-            protocol: "Kafka_0_10"
-            kafka-docker-version: "0.10.0.0"
-          - name: "Kafka 0.10.1"
-            runtime: "V_0_10_1"
-            protocol: "Kafka_0_10_1"
-            kafka-docker-version: "0.10.1.0"
           - name: "Kafka 0.10.2"
             runtime: "V_0_10_2"
-            protocol: "Kafka_0_10_2"
             kafka-docker-version: "0.10.2.0"
-          - name: "Kafka 0.11.0"
-            runtime: "V_0_11_0"
-            protocol: "Kafka_0_11_0"
-            kafka-docker-version: "0.11.0.0"
-          - name: "Kafka 0.11.0.1"
-            runtime: "V_0_11_0_1"
-            protocol: "Kafka_0_11_0_1"
-            kafka-docker-version: "0.11.0.1"
           - name: "Kafka 1.0.0"
             runtime: "V_1_0_0"
-            protocol: "Kafka_1_0_0"
             kafka-docker-version: "1.0.0"
-        java-version: [11, 17, 21]
+        java-version: [8, 11, 17, 21]
         scala-version: ["2.12.20"]
 
     name: Test ${{ matrix.kafka-version.name }} on Java ${{ matrix.java-version }} / Scala ${{ matrix.scala-version }}
@@ -85,7 +67,6 @@ jobs:
     - name: Run tests
       env:
         KAFKA_TEST_RUNTIME: ${{ matrix.kafka-version.runtime }}
-        KAFKA_TEST_PROTOCOL: ${{ matrix.kafka-version.protocol }}
       run: |
         # Run tests with timeout to prevent hanging
         timeout 30m sbt test || {
