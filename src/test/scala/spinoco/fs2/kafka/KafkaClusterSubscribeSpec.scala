@@ -1,8 +1,9 @@
 package spinoco.fs2.kafka
 
 import cats.effect.IO
+import cats.effect.unsafe.implicits.global
 import fs2._
-import spinoco.protocol.kafka.ProtocolVersion
+import org.scalatest.time.Span
 
 import scala.concurrent.duration._
 
@@ -13,16 +14,14 @@ import scala.concurrent.duration._
   */
 class KafkaClusterSubscribeSpec extends Fs2KafkaRuntimeSpec {
 
+  override val timeLimit: Span = 200.seconds
   s"cluster" - {
 
-    "subscribe-at-zero" in skipFor(
-      KafkaRuntimeRelease.V_0_9_0_1 -> ProtocolVersion.Kafka_0_8
-      , KafkaRuntimeRelease.V_0_9_0_1 -> ProtocolVersion.Kafka_0_9
-    ) {
+    "subscribe-at-zero" in {
       withKafkaCluster(runtime).flatMap { nodes =>
-
+        Stream.sleep[IO](10.seconds) >> // Wait for cluster to stabilize and topic to propagate
         Stream.eval(createKafkaTopic(nodes.broker1DockerId, testTopicA, replicas = 3)) >>
-          KafkaClient[IO](localCluster, protocol, "test-client").flatMap { kc =>
+          Stream.resource(KafkaClient.client[IO](localCluster, protocol, "test-client")).flatMap { kc =>
           awaitLeaderAvailable(kc, testTopicA, part0) >>
           Stream.eval(publishNMessages(kc, 0, 20, quorum = true)) >>
             kc.subscribe(testTopicA, part0, HeadOffset)
@@ -31,33 +30,28 @@ class KafkaClusterSubscribeSpec extends Fs2KafkaRuntimeSpec {
 
     }
 
-    "subscribe-at-tail" in skipFor(
-      KafkaRuntimeRelease.V_0_9_0_1 -> ProtocolVersion.Kafka_0_8
-      , KafkaRuntimeRelease.V_0_9_0_1 -> ProtocolVersion.Kafka_0_9
-    ) {
+    "subscribe-at-tail" in {
 
       withKafkaCluster(runtime).flatMap { nodes =>
-
+        Stream.sleep[IO](10.seconds) >> // Wait for cluster to stabilize and topic to propagate
         Stream.eval(createKafkaTopic(nodes.broker1DockerId, testTopicA, replicas = 3)) >>
-          KafkaClient[IO](localCluster, protocol, "test-client").flatMap { kc =>
+          Stream.resource(KafkaClient.client[IO](localCluster, protocol, "test-client")).flatMap { kc =>
           awaitLeaderAvailable(kc, testTopicA, part0) >>
           Stream.eval(publishNMessages(kc, 0, 20, quorum = true)) >>
             Stream(
               kc.subscribe(testTopicA, part0, TailOffset)
-              , Stream.sleep_[IO](3.second) ++ Stream.eval_(publishNMessages(kc, 20, 30, quorum = true))
+              , Stream.sleep_[IO](3.second) ++ Stream.exec(publishNMessages(kc, 20, 30, quorum = true))
             ).parJoinUnbounded
         }.take(10)
       }.compile.toVector.unsafeRunTimed(180.seconds).map { _.map { _.copy(tail = offset(30)) } } shouldBe Some(generateTopicMessages(20, 30, 30))
     }
 
-    "recovers from leader-failure" in skipFor(
-      KafkaRuntimeRelease.V_0_9_0_1 -> ProtocolVersion.Kafka_0_8
-      , KafkaRuntimeRelease.V_0_9_0_1 -> ProtocolVersion.Kafka_0_9
-    ) {
+    "recovers from leader-failure" in {
 
       withKafkaCluster(runtime).flatMap { nodes =>
+        Stream.sleep[IO](10.seconds) >> // Wait for cluster to stabilize and topic to propagate
         Stream.eval(createKafkaTopic(nodes.broker1DockerId, testTopicA, replicas = 3)) >>
-        KafkaClient[IO](localCluster, protocol, "test-client").flatMap { kc =>
+        Stream.resource(KafkaClient.client[IO](localCluster, protocol, "test-client")).flatMap { kc =>
           awaitLeaderAvailable(kc, testTopicA, part0) flatMap { leader =>
           Stream.eval(publishNMessages(kc, 0, 20, quorum = true)) >>
           Stream(
@@ -68,7 +62,7 @@ class KafkaClusterSubscribeSpec extends Fs2KafkaRuntimeSpec {
             , Stream.sleep[IO](10.seconds) >>
               awaitNewLeaderAvailable(kc, testTopicA, part0, leader) >>
               Stream.sleep[IO](3.seconds) >>
-              Stream.eval_(publishNMessages(kc, 20, 30, quorum = true))
+              Stream.exec(publishNMessages(kc, 20, 30, quorum = true))
           ).parJoinUnbounded
         }}.take(30)
       }.compile.toVector.unsafeRunTimed(180.seconds).map { _.map { _.copy(tail = offset(30)) } } shouldBe Some(generateTopicMessages(0, 30, 30))

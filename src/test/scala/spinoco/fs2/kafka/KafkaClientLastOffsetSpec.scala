@@ -1,6 +1,7 @@
 package spinoco.fs2.kafka
 
 
+import cats.effect.unsafe.implicits.global
 import fs2._
 import scodec.bits.ByteVector
 import shapeless.tag
@@ -15,17 +16,17 @@ class KafkaClientLastOffsetSpec extends Fs2KafkaRuntimeSpec {
   s"Last Offset (single broker)" - {
 
     "queries when topic is empty"  in {
-      withKafkaClient(runtime, protocol) { kc =>
+      withKafkaSingle { kc =>
           Stream.eval(kc.offsetRangeFor(testTopicA, tag[PartitionId](0)))
-      }.compile.toVector.unsafeRunTimed(30.seconds) shouldBe Some(Vector((offset(0), offset(0))))
+      }.compile.toVector.unsafeRunTimed(60.seconds) shouldBe Some(Vector((offset(0), offset(0))))
     }
 
 
     "queries when topic is non-empty" in {
-      withKafkaClient(runtime, protocol)  { kc =>
+      withKafkaSingle  { kc =>
           Stream.eval(kc.publish1(testTopicA, part0, ByteVector(1, 2, 3), ByteVector(5, 6, 7), false, 10.seconds)) >>
           Stream.eval(kc.offsetRangeFor(testTopicA, tag[PartitionId](0)))
-      }.compile.toVector.unsafeRunTimed(30.seconds) shouldBe Some(Vector((offset(0), offset(1))))
+      }.compile.toVector.unsafeRunTimed(60.seconds) shouldBe Some(Vector((offset(0), offset(1))))
     }
 
 

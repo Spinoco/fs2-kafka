@@ -1,7 +1,7 @@
 package spinoco.fs2.kafka.network
 
-import cats.effect.IO
-import cats.effect.concurrent.Ref
+import cats.effect.{IO, Ref}
+import cats.effect.unsafe.implicits.global
 
 import spinoco.fs2.kafka.Fs2KafkaClientSpec
 import fs2._
@@ -61,7 +61,7 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
         metaRequestMessage
       ).covary[IO].through(impl.sendMessages[IO](
         openRequests = ref
-        , sendOne = { (chunk:Chunk[Byte]) => IO{ val bs = chunk.toBytes; send = send :+ ByteVector.view(bs.values).drop(bs.offset).take(bs.size) }}
+        , sendOne = { (chunk:Chunk[Byte]) => IO{ val bs = chunk.toArray; send = send :+ ByteVector.view(bs) }}
       )).compile.drain.unsafeRunSync()
 
       send.size shouldBe 1
@@ -75,7 +75,7 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
         produceRequestMessage
       ).covary[IO].through(impl.sendMessages[IO](
         openRequests = ref
-        , sendOne = { (chunk:Chunk[Byte]) => IO{ val bs = chunk.toBytes; send = send :+ ByteVector.view(bs.values).drop(bs.offset).take(bs.size) }}
+        , sendOne = { (chunk:Chunk[Byte]) => IO{ val bs = chunk.toArray; send = send :+ ByteVector.view(bs) }}
       )).compile.drain.unsafeRunSync()
 
       send.size shouldBe 1
@@ -89,7 +89,7 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
         produceRequestMessage.copy(request = produceRequest.copy(requiredAcks = RequiredAcks.NoResponse))
       ).covary[IO].through(impl.sendMessages[IO](
         openRequests = ref
-        , sendOne = { (chunk:Chunk[Byte]) => IO{ val bs = chunk.toBytes; send = send :+ ByteVector.view(bs.values).drop(bs.offset).take(bs.size) }}
+        , sendOne = { (chunk:Chunk[Byte]) => IO{ val bs = chunk.toArray; send = send :+ ByteVector.view(bs) }}
       )).compile.drain.unsafeRunSync()
 
       send.size shouldBe 1
@@ -105,8 +105,8 @@ class BrokerConnectionSpec extends Fs2KafkaClientSpec {
     "correctly chunks based on size of message" in  forAll { (messages:Seq[Seq[Seq[Byte]]]) =>
       val source = messages.map { oneMsg =>
         val sizeOfMsg = oneMsg.map(_.size).sum
-        val chunks = oneMsg.map(sb => Chunk.bytes(sb.toArray))
-        chunks.foldLeft(Stream.chunk[IO, Byte](Chunk.bytes(ByteVector.fromInt(sizeOfMsg).toArray))) { case (s,next) => s ++ Stream.chunk(next) }
+        val chunks = oneMsg.map(sb => Chunk.array(sb.toArray))
+        chunks.foldLeft(Stream.chunk[IO, Byte](Chunk.array(ByteVector.fromInt(sizeOfMsg).toArray))) { case (s,next) => s ++ Stream.chunk(next) }
       }.foldLeft(Stream.empty:Stream[IO, Byte])(_ ++ _)
 
       val resultMsg = source.through(impl.receiveChunks).compile.toVector.unsafeRunSync()

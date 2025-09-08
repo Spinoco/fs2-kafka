@@ -1,8 +1,6 @@
 package spinoco.fs2.kafka.network
 
-import java.net.InetSocketAddress
-
-import cats.effect.Sync
+import com.comcast.ip4s.{Host, Port, SocketAddress}
 
 
 /**
@@ -15,8 +13,11 @@ case class BrokerAddress(
   , port: Int
 )  { self =>
 
-  def toInetSocketAddress[F[_] : Sync]: F[InetSocketAddress] =
-    Sync[F].catchNonFatal { new InetSocketAddress(self.host, self.port) }
+  def toSocketAddress: Either[String, SocketAddress[Host]] =
+    for {
+      host <- Host.fromString(self.host).toRight(s"Invalid host: ${self.host}")
+      port <- Port.fromInt(self.port).toRight(s"Invalid port: ${self.port}")
+    } yield SocketAddress(host, port)
 
 }
 

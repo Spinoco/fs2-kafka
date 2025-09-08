@@ -1,8 +1,9 @@
 package spinoco.fs2.kafka
 
-import cats.effect.concurrent.{Ref, Semaphore}
-import cats.effect.IO
-import cats.syntax.all._
+import cats.Applicative
+import cats.effect.{IO, Ref}
+import cats.effect.std.{Semaphore, Queue}
+import cats.effect.unsafe.implicits.global
 import fs2._
 import shapeless.tag
 import shapeless.tag.@@
@@ -15,7 +16,6 @@ import scala.sys.process.{Process, ProcessLogger}
 object DockerSupport {
   val ExtractVersion = """Docker version ([0-9\.\-a-z]+), build ([0-9a-fA-F]+).*""".r("version", "build")
   sealed trait DockerId
-  import Fs2KafkaClientResources._
 
   /** Returns version of docker, if that docker is available. **/
   def dockerVersion:IO[Option[String]] = IO {
@@ -35,8 +35,8 @@ object DockerSupport {
     */
   def installImageWhenNeeded(imageName:String):IO[Boolean] = IO {
     val current:String= Process(s"docker images $imageName -q").!!
-    if (current.lines.isEmpty) {
-      Process(s"docker pull $imageName").!!
+    if (current.linesIterator.isEmpty) {
+      Process(s"docker pull --platform linux/amd64 $imageName").!!
       true
     } else false
   }
@@ -49,7 +49,7 @@ object DockerSupport {
     * @return
     */
   def runImage(imageName: String, name: Option[String])(props: String*):IO[String @@ DockerId] = IO {
-    val cmd = s"docker run -d ${ name.map(n => s"--name=$n").mkString } ${props.mkString(" ")} $imageName"
+    val cmd = s"docker run -d --platform linux/amd64 ${ name.map(n => s"--name=$n").mkString } ${props.mkString(" ")} $imageName"
     tag[DockerId](Process(cmd).!!.trim)
   }
 
@@ -60,12 +60,12 @@ object DockerSupport {
     */
   def followImageLog(imageId:String @@ DockerId): Stream[IO,String] = {
     Stream.eval(Semaphore[IO](1)) flatMap { semaphore =>
-    Stream.eval(Ref.of(false)) flatMap { isDone =>
-    Stream.eval(async.unboundedQueue[IO,String]).flatMap { q =>
+    Stream.eval(Ref.of[IO, Boolean](false)) flatMap { isDone =>
+    Stream.eval(Queue.unbounded[IO, String]).flatMap { q =>
 
       def enqueue(s: String): Unit = {
         semaphore.release >>
-        isDone.get.flatMap { done => if (!done) q.enqueue1(s) else IO.unit } >>
+        isDone.get.flatMap { done => if (!done) q.offer(s).void else IO.unit } >>
         semaphore.acquire
       } unsafeRunSync
 
@@ -78,16 +78,16 @@ object DockerSupport {
 
       Stream.bracket(IO(Process(s"docker logs -f $imageId").run(logger)))(
         p => semaphore.release >> isDone.set(true) >> IO(p.destroy()) >> semaphore.acquire
-      ).flatMap { _ => q.dequeue }
+      ).flatMap { _ => Stream.fromQueueUnterminated(q) }
     }}}
   }
 
   def runningImages: IO[Set[String @@ DockerId]] = IO {
-    Process(s"docker ps -q").!!.lines.filter(_.trim.nonEmpty).map(tag[DockerId](_)).toSet
+    Process(s"docker ps -q").!!.linesIterator.filter(_.trim.nonEmpty).map(tag[DockerId](_)).toSet
   }
 
   def availableImages: IO[Set[String @@ DockerId]] = IO {
-    Process(s"docker ps -aq").!!.lines.filter(_.trim.nonEmpty).map(tag[DockerId](_)).toSet
+    Process(s"docker ps -aq").!!.linesIterator.filter(_.trim.nonEmpty).map(tag[DockerId](_)).toSet
   }
 
 
@@ -98,7 +98,7 @@ object DockerSupport {
     IO { Process(s"docker kill $imageId").!! } >>
     runningImages.flatMap { allRun =>
       if (allRun.exists(imageId.startsWith)) killImage(imageId)
-      else IO.pure(())
+      else Applicative[IO].pure(())
     }
   }
 
@@ -109,7 +109,7 @@ object DockerSupport {
     IO { Process(s"docker rm $imageId").!! } >>
     availableImages.flatMap { allAvail =>
       if (allAvail.exists(imageId.startsWith)) cleanImage(imageId)
-      else IO.pure(())
+      else Applicative[IO].pure(())
     }
   }
 

@@ -1,18 +1,18 @@
 package spinoco.fs2.kafka.network
 
-import java.net.InetSocketAddress
-import java.util.Date
-
 import cats.effect.IO
+import cats.effect.unsafe.implicits.global
+import com.comcast.ip4s.{Host, Port, SocketAddress}
 import fs2._
 import scodec.bits.ByteVector
 import shapeless.tag
-import spinoco.fs2.kafka.{KafkaRuntimeRelease, partition}
+import spinoco.fs2.kafka.partition
 import spinoco.protocol.kafka.Message.SingleMessage
 import spinoco.protocol.kafka.Request._
 import spinoco.protocol.kafka.Response._
 import spinoco.protocol.kafka._
 
+import java.util.Date
 import scala.concurrent.duration._
 
 /**
@@ -22,8 +22,8 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
   "Kafka 0.10.0" - {
     "Publish and subscribe message" in {
       val result =
-        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0) { case (zkId, kafkaId) =>
-          val createTopic = Stream.eval_(createKafkaTopic(kafkaId, testTopic1))
+        withKafkaSingle{ _ =>
+          val createTopic = Stream.exec(createKafkaTopicScript(testTopic1))
           val publishOne = (Stream(
             RequestMessage(
               version = ProtocolVersion.Kafka_0_10
@@ -36,7 +36,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
               )
             )
           ) ++ Stream.sleep_[IO](1.minute))
-            .through(BrokerConnection(new InetSocketAddress("127.0.0.1", 9092)))
+            .through(BrokerConnection.mk(SocketAddress(Host.fromString("172.30.0.11").get, Port.fromInt(9092).get)))
             .take(1).map(Left(_))
 
           val fetchOne =
@@ -52,7 +52,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
                 , topics = Vector((testTopic1, Vector((part0, tag[Offset](0), 10240))))
               )
             )) ++ Stream.sleep_[IO](1.minute))
-              .through(BrokerConnection(new InetSocketAddress("127.0.0.1", 9092)))
+              .through(BrokerConnection.mk(SocketAddress(Host.fromString("172.30.0.11").get, Port.fromInt(9092).get)))
               .take(1).map(Right(_))
 
 
@@ -69,9 +69,9 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
 
     "Fetch metadata for topics" in {
       val result =
-        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0) { case (zkId, kafkaId) =>
-          val createTopic1 = Stream.eval_(createKafkaTopic(kafkaId, testTopic1))
-          val createTopic2 = Stream.eval_(createKafkaTopic(kafkaId, testTopic2))
+        withKafkaSingle { _ =>
+          val createTopic1 = Stream.exec(createKafkaTopicScript(testTopic1))
+          val createTopic2 = Stream.exec(createKafkaTopicScript(testTopic2))
 
           val fetchMeta =
             (Stream(RequestMessage(
@@ -80,10 +80,10 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
               , clientId = "test-subscriber"
               , request = MetadataRequest(Vector())
             )) ++ Stream.sleep_[IO](1.minute))
-              .through(BrokerConnection(new InetSocketAddress("127.0.0.1",9092)))
+              .through(BrokerConnection.mk(SocketAddress(Host.fromString("172.30.0.11").get, Port.fromInt(9092).get)))
               .take(1)
 
-          createTopic1 ++ createTopic2  ++ fetchMeta
+          createTopic1 ++ createTopic2 ++ fetchMeta
 
         }.compile.toVector.unsafeRunSync()
 
@@ -97,8 +97,8 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
 
     "Fetch offsets topics" in {
       val result =
-        withKafkaSingleton(KafkaRuntimeRelease.V_0_10_0) { case (zkId, kafkaId) =>
-          val createTopic1 = Stream.eval_(createKafkaTopic(kafkaId, testTopic1))
+        withKafkaSingle { _ =>
+          val createTopic1 = Stream.exec(createKafkaTopicScript(testTopic1))
 
           val fetchOffsets=
             (Stream(RequestMessage(
@@ -107,7 +107,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
               , clientId = "test-subscriber"
               , request = OffsetsRequest(tag[Broker](-1), Vector((testTopic1, Vector((partition(0), new Date(-1), Some(10))))))
             )) ++ Stream.sleep_[IO](1.minute))
-              .through(BrokerConnection(new InetSocketAddress("127.0.0.1",9092)))
+              .through(BrokerConnection.mk(SocketAddress(Host.fromString("172.30.0.11").get, Port.fromInt(9092).get)))
               .take(1)
 
           createTopic1 ++ fetchOffsets

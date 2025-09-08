@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, series/* ]
+  pull_request:
+    branches: [ main, series/* ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        kafka-version:
+          - name: "Kafka 0.10.0"
+            runtime: "V_0_10_0"
+            protocol: "Kafka_0_10"
+            kafka-docker-version: "0.10.0.0"
+          - name: "Kafka 0.10.1"
+            runtime: "V_0_10_1"
+            protocol: "Kafka_0_10_1"
+            kafka-docker-version: "0.10.1.0"
+          - name: "Kafka 0.10.2"
+            runtime: "V_0_10_2"
+            protocol: "Kafka_0_10_2"
+            kafka-docker-version: "0.10.2.0"
+          - name: "Kafka 0.11.0"
+            runtime: "V_0_11_0"
+            protocol: "Kafka_0_11_0"
+            kafka-docker-version: "0.11.0.0"
+          - name: "Kafka 0.11.0.1"
+            runtime: "V_0_11_0_1"
+            protocol: "Kafka_0_11_0_1"
+            kafka-docker-version: "0.11.0.1"
+          - name: "Kafka 1.0.0"
+            runtime: "V_1_0_0"
+            protocol: "Kafka_1_0_0"
+            kafka-docker-version: "1.0.0"
+        java-version: [11, 17, 21]
+        scala-version: ["2.12.20"]
+
+    name: Test ${{ matrix.kafka-version.name }} on Java ${{ matrix.java-version }} / Scala ${{ matrix.scala-version }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK ${{ matrix.java-version }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ matrix.java-version }}
+        distribution: 'temurin'
+
+    - name: Setup sbt
+      uses: sbt/setup-sbt@v1
+
+    - name: Cache sbt dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.sbt
+          ~/.ivy2/cache
+          ~/.coursier/cache
+          target
+          project/target
+        key: ${{ runner.os }}-sbt-${{ hashFiles('**/*.sbt', 'project/build.properties', 'project/plugins.sbt') }}
+        restore-keys: |
+          ${{ runner.os }}-sbt-
+
+    - name: Setup Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Make scripts executable
+      run: |
+        chmod +x scripts/*.sh
+        ls -la scripts/
+
+    - name: Compile project
+      run: sbt compile
+
+    - name: Compile tests
+      run: sbt test:compile
+
+    - name: Run tests
+      env:
+        KAFKA_TEST_RUNTIME: ${{ matrix.kafka-version.runtime }}
+        KAFKA_TEST_PROTOCOL: ${{ matrix.kafka-version.protocol }}
+      run: |
+        # Run tests with timeout to prevent hanging
+        timeout 30m sbt test || {
+          echo "Tests timed out or failed, checking containers..."
+          docker ps -a
+          docker logs broker1 || true
+          docker logs zookeeper || true
+          exit 1
+        }
+
+    - name: Cleanup Docker containers
+      if: always()
+      run: |
+        # Cleanup any remaining containers
+        ./scripts/stop-kafka.sh || true
+        docker ps -a
+        docker system prune -f || true
+

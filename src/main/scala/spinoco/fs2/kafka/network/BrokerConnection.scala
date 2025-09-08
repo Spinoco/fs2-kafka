@@ -1,21 +1,18 @@
 package spinoco.fs2.kafka.network
 
-import java.net.InetSocketAddress
-import java.nio.channels.AsynchronousChannelGroup
-
+import cats.Applicative
+import cats.effect.{Async, Ref}
 import cats.syntax.all._
-import cats.{Applicative, Monad}
-import cats.effect.{ConcurrentEffect, Timer}
-import cats.effect.concurrent.Ref
-import fs2._
+import com.comcast.ip4s.{Host, SocketAddress}
 import fs2.Stream._
+import fs2._
+import fs2.io.net.Network
 import scodec.bits.ByteVector
-
 import spinoco.protocol.kafka.Request.{ProduceRequest, RequiredAcks}
 import spinoco.protocol.kafka.codec.MessageCodec
 import spinoco.protocol.kafka.{ApiKey, RequestMessage, ResponseMessage}
+
 import scala.annotation.tailrec
-import scala.concurrent.duration._
 
 
 
@@ -36,27 +33,21 @@ object BrokerConnection {
     * this process will fail resulting in termination of the connection with Broker.
     *
     * @param address          Address of the kafka Broker
-    * @param writeTimeout     Timeout for performing the write operations
-    * @param AG
-    * @tparam F
-    * @return
+   * @return
     */
-  def apply[F[_] : ConcurrentEffect : Timer](
-    address: InetSocketAddress
-    , writeTimeout: Option[FiniteDuration] = None
-    , readTimeout: Option[FiniteDuration] = None
-    , readMaxChunkSize: Int = 256 * 1024      // 256 Kilobytes
-  )(implicit AG:AsynchronousChannelGroup): Pipe[F, RequestMessage, ResponseMessage] = {
+  def mk[F[_] : Async : Network](
+    address: SocketAddress[Host]
+  ): Pipe[F, RequestMessage, ResponseMessage] = {
     (source: Stream[F,RequestMessage]) =>
-      Stream.resource(fs2.io.tcp.client[F](address)).flatMap { socket =>
+      Stream.resource(fs2.io.net.Network[F].client(address)).flatMap { socket =>
         eval(Ref.of(Map.empty[Int,RequestMessage])).flatMap { openRequests =>
           val send = source.through(impl.sendMessages(
             openRequests = openRequests
-            , sendOne = (x) => socket.write(x, writeTimeout)
+            , sendOne = socket.write
           ))
 
           val receive =
-            socket.reads(readMaxChunkSize, timeout = readTimeout)
+            socket.reads
             .through(impl.receiveMessages(
               openRequests = openRequests
             ))
@@ -78,10 +69,10 @@ object BrokerConnection {
       * @tparam F
       * @return
       */
-    def sendMessages[F[_] : Applicative](
+    def sendMessages[F[_] : Applicative : RaiseThrowable](
      openRequests: Ref[F,Map[Int,RequestMessage]]
      , sendOne: Chunk[Byte] => F[Unit]
-    )(implicit F: Monad[F]):Sink[F,RequestMessage] = {
+    ):Pipe[F,RequestMessage,Nothing] = {
       _.evalMap { rm =>
         rm.request match {
           case produce: ProduceRequest if produce.requiredAcks == RequiredAcks.NoResponse =>
@@ -92,17 +83,17 @@ object BrokerConnection {
       }
        .flatMap { rm =>
          MessageCodec.requestCodec.encode(rm).fold(
-           err => raiseError(new Throwable(s"Failed to serialize message: $err : $rm"))
-           , data => eval(sendOne(Chunk.bytes(data.toByteArray)))
+           err => raiseError[F](new Throwable(s"Failed to serialize message: $err : $rm"))
+           , data => eval(sendOne(Chunk.array(data.toByteArray))).drain
          )
        }
     }
 
 
-    def receiveMessages[F[_]](
+    def receiveMessages[F[_] : Async](
        openRequests: Ref[F,Map[Int,RequestMessage]]
     ):Pipe[F,Byte,ResponseMessage] = {
-      _.through(receiveChunks)
+      _.through(receiveChunks[F])
       .through(decodeReceived(openRequests))
     }
 
@@ -117,19 +108,18 @@ object BrokerConnection {
       *
       * @return
       */
-    def receiveChunks[F[_]]: Pipe[F,Byte,ByteVector] = {
+    def receiveChunks[F[_] : RaiseThrowable]: Pipe[F,Byte,ByteVector] = {
 
       def go(acc: ByteVector, msgSz: Option[Int], s: Stream[F, Byte]): Pull[F, ByteVector, Unit] = {
-        s.pull.unconsChunk flatMap {
+        s.pull.uncons flatMap {
           case Some((ch, tail)) =>
-            val bs = ch.toBytes
-            val buff = acc ++ ByteVector.view(bs.values, bs.offset, bs.size)
+            val buff = acc ++ ByteVector.view(ch.toArray)
             val (rem, sz, out) = collectChunks(buff, msgSz)
 
-            Pull.segment(out) >> go(rem, sz, tail)
+            Pull.output(out) >> go(rem, sz, tail)
 
           case None =>
-            if (acc.nonEmpty) Pull.raiseError(new Throwable(s"Input terminated before all data were consumed. Buff: $acc"))
+            if (acc.nonEmpty) Pull.raiseError[F](new Throwable(s"Input terminated before all data were consumed. Buff: $acc"))
             else Pull.done
         }
       }
@@ -148,19 +138,19 @@ object BrokerConnection {
     def collectChunks(
       in: ByteVector
       , msgSz:Option[Int]
-    ):(ByteVector, Option[Int], Segment[ByteVector, Unit]) = {
+    ):(ByteVector, Option[Int], Chunk[ByteVector]) = {
       @tailrec
-      def go(buff: ByteVector, currSz: Option[Int], acc: Vector[ByteVector]): (ByteVector, Option[Int], Segment[ByteVector, Unit]) = {
+      def go(buff: ByteVector, currSz: Option[Int], acc: Vector[ByteVector]): (ByteVector, Option[Int], Chunk[ByteVector]) = {
         currSz match {
           case None =>
-            if (buff.size < 4) (buff, None, Segment.indexedSeq(acc))
+            if (buff.size < 4) (buff, None, Chunk.from(acc))
             else {
               val (sz, rem) = buff.splitAt(4)
               go(rem, Some(sz.toInt()), acc)
             }
 
           case Some(sz) =>
-            if (buff.size < sz) (buff, Some(sz), Segment.indexedSeq(acc))
+            if (buff.size < sz) (buff, Some(sz), Chunk.from(acc))
             else {
               val (h,t) = buff.splitAt(sz)
               go(t, None, acc :+ h)
@@ -185,20 +175,20 @@ object BrokerConnection {
       * @tparam F
       * @return
       */
-    def decodeReceived[F[_]](
+    def decodeReceived[F[_] : RaiseThrowable](
       openRequests: Ref[F,Map[Int,RequestMessage]]
     ):Pipe[F,ByteVector,ResponseMessage] = {
       _.flatMap { bs =>
-        if (bs.size < 4) Stream.raiseError(new Throwable(s"Message chunk does not have correlation id included: $bs"))
+        if (bs.size < 4) Stream.raiseError[F](new Throwable(s"Message chunk does not have correlation id included: $bs"))
         else {
           val correlationId = bs.take(4).toInt()
           eval(openRequests.modify { m => (m - correlationId, m) }).flatMap { m =>
             m.get(correlationId) match {
-              case None => Stream.raiseError(new Throwable(s"Received message correlationId for message that does not exists: $correlationId : $bs : $m"))
+              case None => Stream.raiseError[F](new Throwable(s"Received message correlationId for message that does not exists: $correlationId : $bs : $m"))
               case Some(req) =>
                 MessageCodec.responseCodecFor(req.version, ApiKey.forRequest(req.request)).decode(bs.drop(4).bits)
                 .fold(
-                  err => Stream.raiseError(new Throwable(s"Failed to decode response to request: $err : $req : $bs"))
+                  err => Stream.raiseError[F](new Throwable(s"Failed to decode response to request: $err : $req : $bs"))
                   , result => Stream.emit(ResponseMessage(correlationId,result.value))
                 )
             }

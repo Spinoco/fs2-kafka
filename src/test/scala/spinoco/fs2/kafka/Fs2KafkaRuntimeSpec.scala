@@ -1,9 +1,6 @@
 package spinoco.fs2.kafka
 
-import java.net.InetAddress
-
 import cats.effect.IO
-import cats.syntax.all._
 import fs2._
 import org.scalatest.{Args, Status}
 import scodec.bits.ByteVector
@@ -12,17 +9,16 @@ import shapeless.tag.@@
 import spinoco.fs2.kafka.network.BrokerAddress
 import spinoco.protocol.kafka.{Broker, PartitionId, ProtocolVersion, TopicName}
 
-import scala.sys.process.{Process, ProcessLogger}
+import java.net.InetAddress
 import scala.concurrent.duration._
+import scala.sys.process.{Process, ProcessLogger}
 import scala.util.Try
 
 
 object Fs2KafkaRuntimeSpec {
-  val ZookeeperImage = "jplock/zookeeper:3.4.8"
+  val ZookeeperImage = "zookeeper:3.8.4"
   val DefaultZkPort:Int = 2181
 
-  val Kafka8Image =  "wurstmeister/kafka:0.8.2.0"
-  val Kafka9Image =  "wurstmeister/kafka:0.9.0.1"
   val Kafka10Image = "wurstmeister/kafka:0.10.0.0"
   val Kafka101Image = "wurstmeister/kafka:0.10.1.0"
   val Kafka102Image = "wurstmeister/kafka:0.10.2.0"
@@ -32,14 +28,21 @@ object Fs2KafkaRuntimeSpec {
 }
 
 object KafkaRuntimeRelease extends Enumeration {
-  val V_8_2_0 = Value
-  val V_0_9_0_1 = Value
   val V_0_10_0 = Value
   val V_0_10_1 = Value
   val V_0_10_2 = Value
   val V_0_11_0 = Value
   val V_0_11_0_1 = Value
   val V_1_0_0 = Value
+
+  def toKafkaVersion(runtime: Value): String = runtime match {
+    case V_0_10_0 => "0.10.0.0"
+    case V_0_10_1 => "0.10.1.0"
+    case V_0_10_2 => "0.10.2.0"
+    case V_0_11_0 => "0.11.0.0"
+    case V_0_11_0_1 => "0.11.0.1"
+    case V_1_0_0 => "1.0.0"
+  }
 }
 
 
@@ -49,10 +52,16 @@ object KafkaRuntimeRelease extends Enumeration {
   */
 class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   import DockerSupport._
-  import Fs2KafkaRuntimeSpec._
 
   val runtime: KafkaRuntimeRelease.Value = Option(System.getenv().get("KAFKA_TEST_RUNTIME")).map(KafkaRuntimeRelease.withName).getOrElse(KafkaRuntimeRelease.V_1_0_0)
   val protocol: ProtocolVersion.Value = Option(System.getenv().get("KAFKA_TEST_PROTOCOL")).map(ProtocolVersion.withName).getOrElse(ProtocolVersion.Kafka_0_10_2)
+
+  
+  // Scripts paths
+  val scriptDir = System.getProperty("user.dir") + "/scripts"
+  val startScript = s"$scriptDir/start-kafka.sh"
+  val stopScript = s"$scriptDir/stop-kafka.sh"
+  val testScript = s"$scriptDir/test-kafka.sh"
 
   def skipFor(versions: (KafkaRuntimeRelease.Value, ProtocolVersion.Value)*)(test: => Any): Any = {
     if (! versions.contains((runtime, protocol))) test
@@ -67,9 +76,10 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   val testTopicA = topic("test-topic-A")
   val part0 = partition(0)
 
-  val localBroker1_9092 = BrokerAddress(thisLocalHost.getHostAddress, 9092)
-  val localBroker2_9192 = BrokerAddress(thisLocalHost.getHostAddress, 9192)
-  val localBroker3_9292 = BrokerAddress(thisLocalHost.getHostAddress, 9292)
+  // Static IP addresses matching the Docker network configuration
+  val localBroker1_9092 = BrokerAddress("172.30.0.11", 9092)
+  val localBroker2_9192 = BrokerAddress("172.30.0.12", 9192) 
+  val localBroker3_9292 = BrokerAddress("172.30.0.13", 9292)
 
   val localCluster = Set(localBroker1_9092, localBroker2_9192, localBroker3_9292)
 
@@ -78,60 +88,77 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
       IO { println(s"LOGGER: $level: $msg"); if (throwable != null) throwable.printStackTrace() }
   }
 
-
-
-  /**
-    * Starts zookeeper listening on given port. ZK runs on host network.
-    * @return
-    */
-  def startZk(port:Int = DefaultZkPort):IO[String @@ DockerId] = {
-    for {
-      _ <- dockerVersion.flatMap(_.fold[IO[String]](IO.raiseError(new Throwable("Docker is not available")))(IO.pure))
-      _ <- installImageWhenNeeded(ZookeeperImage)
-      _ <- IO { println(s"STARTING ZK @$port") }
-      runId <- runImage(ZookeeperImage,None)(
-        "--restart=no"
-        , "--net=fs2-kafka-network"
-        , "--name=zookeeper"
-        , s"-p $port:$port/tcp"
-      )
-    } yield runId
-  }
-
-
-  /** stops and cleans the given image **/
-  def stopImage(zkImageId: String @@ DockerId):IO[Unit] = {
-    runningImages flatMap { allRunning =>
-      if (allRunning.exists(zkImageId.startsWith)) killImage(zkImageId) >> cleanImage(zkImageId)
-      else availableImages flatMap { allAvailable =>
-        if (allAvailable.exists(zkImageId.startsWith)) cleanImage(zkImageId)
-        else IO.pure(())
+  // Helper method to create topic for single broker tests
+  def createTopicForSingleBroker(): IO[Unit] = {
+    IO {
+      println("Creating test topic for single broker...")
+      val result = scala.sys.process.Process(Seq(
+        "docker", "exec", "broker1", "kafka-topics.sh",
+        "--create", "--topic", "test-topic-A", 
+        "--partitions", "1", "--replication-factor", "1",
+        "--zookeeper", "zookeeper:2181"
+      )).!
+      if (result != 0) {
+        throw new RuntimeException(s"Failed to create test topic (exit code: $result)")
       }
+      println("Test topic created successfully")
     }
-
   }
 
-  /** starts kafka. Kafka runs in host network **/
-  def startKafka(image: String, port: Int, zkPort: Int = DefaultZkPort, brokerId: Int = 1): IO[String @@ DockerId] = {
-    for {
-      _ <- dockerVersion.flatMap(_.fold[IO[String]](IO.raiseError(new Throwable("Docker is not available")))(IO.pure))
-      _ <- installImageWhenNeeded(image)
-      params = Seq(
-        "--restart=no"
-        , "--net=fs2-kafka-network"
-        , s"--name=broker$brokerId"
-        , s"""--env KAFKA_PORT=$port"""
-        , s"""--env KAFKA_BROKER_ID=$brokerId"""
-        , s"""--env KAFKA_ADVERTISED_HOST_NAME=broker$brokerId"""
-        , s"""--env KAFKA_ADVERTISED_PORT=$port"""
-        , s"""--env KAFKA_ZOOKEEPER_CONNECT=zookeeper:$zkPort"""
-        , s"-p $port:$port/tcp"
-
-      )
-      - <- IO { println(s"STARTING BROKER[$brokerId] @$port") }
-      runId <- runImage(image,None)(params :_*)
-    } yield runId
+  // New script-based Kafka management
+  def startKafkaUsingScript(mode: String = "single"): IO[Unit] = {
+    val kafkaVersion = KafkaRuntimeRelease.toKafkaVersion(runtime)
+    val command = s"$startScript $mode $kafkaVersion"
+    IO {
+      println(s"Starting Kafka: $command")
+      val result = scala.sys.process.Process(command).!
+      if (result != 0) {
+        throw new RuntimeException(s"Failed to start Kafka with command: $command (exit code: $result)")
+      }
+      println(s"Kafka started successfully (version: $kafkaVersion, mode: $mode)")
+    }
   }
+
+  def stopKafkaUsingScript(): IO[Unit] = {
+    IO {
+      println("Stopping Kafka...")
+      val result = scala.sys.process.Process(stopScript).!
+      if (result != 0) {
+        println(s"Warning: Stop script returned exit code: $result")
+      }
+      println("Kafka stop script completed")
+    }
+  }
+
+  def testKafkaConnectivity(): IO[Unit] = {
+    IO {
+      println("Testing Kafka connectivity...")
+      val result = scala.sys.process.Process(testScript).!
+      if (result != 0) {
+        throw new RuntimeException(s"Kafka connectivity test failed (exit code: $result)")
+      }
+      println("Kafka connectivity test passed")
+    }
+  }
+
+
+  // Helper method for single broker tests
+  def withKafkaSingle[A](test: KafkaClient[IO] => Stream[IO, A]): Stream[IO, A] = {
+    Stream.eval(startKafkaUsingScript("single") >> testKafkaConnectivity()) >>
+    Stream.eval(createTopicForSingleBroker()) >>
+    Stream.resource(KafkaClient.client[IO](Set(localBroker1_9092), protocol, "test-client")).flatMap { kc =>
+      test(kc)
+    }.onFinalize(stopKafkaUsingScript())
+  }
+
+  // Helper method for cluster tests  
+  def withKafkaCluster[A](test: KafkaClient[IO] => Stream[IO, A]): Stream[IO, A] = {
+    Stream.eval(startKafkaUsingScript("cluster") >> testKafkaConnectivity()) >>
+    Stream.resource(KafkaClient.client[IO](localCluster, protocol, "test-client")).flatMap { kc =>
+      test(kc)
+    }.onFinalize(stopKafkaUsingScript())
+  }
+
 
 
   /** creates supplied kafka topic with number of partitions, starting at index 0 **/
@@ -158,109 +185,17 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
   }
 
 
-  /** process emitting once docker id of zk and kafka in singleton (one node) **/
-  def withKafkaSingleton[A](version: KafkaRuntimeRelease.Value)(f: (String @@ DockerId, String @@ DockerId) => Stream[IO, A]):Stream[IO,A] = {
-    Stream.eval(cleanAll) >>
-    Stream.eval(createNetwork("fs2-kafka-network")) >>
-    Stream.eval(startZk()).flatMap { zkId =>
-    awaitZKStarted(zkId) ++ Stream.sleep_[IO](2.seconds) ++
-    Stream.eval(startK(version, 1)).flatMap { kafkaId =>
-      (awaitKStarted(version, kafkaId) ++ f(zkId, kafkaId))
-      .onFinalize {
-        stopImage(kafkaId) >>
-        stopImage(zkId) >>
-        removeNetwork("fs2-kafka-network")
-      }
-    }}
-
-  }
-
-  def withKafkaClient[A](version: KafkaRuntimeRelease.Value, protocol: ProtocolVersion.Value)(f: KafkaClient[IO] => Stream[IO, A]): Stream[IO, A] = {
-    withKafkaSingleton(version) { (_, kafkaDockerId) =>
-      Stream.sleep[IO](1.second) >>
-      Stream.eval(createKafkaTopic(kafkaDockerId, testTopicA)) >>
-      KafkaClient[IO](Set(localBroker1_9092), protocol, "test-client") flatMap { kc =>
-        awaitLeaderAvailable(kc, testTopicA, part0).drain ++ f(kc)
+  def createKafkaTopicScript(topicName: String @@ TopicName): IO[Unit] = {
+    import scala.sys.process._
+    IO {
+      val command = s"docker exec broker1 kafka-topics.sh --create --topic $topicName --partitions 1 --replication-factor 1 --zookeeper zookeeper:2181"
+      val result = command.!
+      if (result != 0) {
+        println(s"Warning: Topic creation returned exit code: $result (topic may already exist)")
       }
     }
   }
 
-  def startK(version: KafkaRuntimeRelease.Value, brokerId: Int):IO[String @@ DockerId] = {
-    val port = 9092+ 100*(brokerId -1)
-    version match {
-      case KafkaRuntimeRelease.V_8_2_0 => startKafka(Kafka8Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_0_9_0_1 => startKafka(Kafka9Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_0_10_0 => startKafka(Kafka10Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_0_10_1 => startKafka(Kafka101Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_0_10_2 => startKafka(Kafka102Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_0_11_0 => startKafka(Kafka11Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_0_11_0_1 => startKafka(Kafka1101Image, port = port, brokerId = brokerId)
-      case KafkaRuntimeRelease.V_1_0_0 => startKafka(Kafka1Image, port = port, brokerId = brokerId)
-    }
-  }
-
-  def awaitZKStarted(zkId: String @@ DockerId):Stream[IO,Nothing] = {
-    followImageLog(zkId).takeWhile(! _.contains("binding to port")).drain ++
-    Stream.eval_(IO(println(s"Zookeeper started at $zkId")))
-  }
-
-  def awaitKStarted(version: KafkaRuntimeRelease.Value, kafkaId: String @@ DockerId): Stream[IO, Nothing] = {
-    val output = Stream.eval_(IO(println(s"Broker $version started at $kafkaId")))
-    version match {
-      case KafkaRuntimeRelease.V_8_2_0 =>
-        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
-
-      case KafkaRuntimeRelease.V_0_9_0_1 =>
-        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
-
-      case KafkaRuntimeRelease.V_0_10_0 =>
-        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
-
-      case KafkaRuntimeRelease.V_0_10_1 =>
-        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
-
-      case KafkaRuntimeRelease.V_0_10_2 =>
-        followImageLog(kafkaId).takeWhile(! _.contains("New leader is ")).drain ++ output
-
-      case KafkaRuntimeRelease.V_0_11_0 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server 1], started")).drain ++ output
-
-      case KafkaRuntimeRelease.V_0_11_0_1 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server 1], started")).drain ++ output
-
-      case KafkaRuntimeRelease.V_1_0_0 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[KafkaServer id=1] started")).drain ++ output
-    }
-  }
-
-  def awaitKFollowerReady(version: KafkaRuntimeRelease.Value, kafkaId: String @@ DockerId, brokerId: Int): Stream[IO, Nothing] = {
-    val output = Stream.eval_(IO(println(s"Broker $brokerId (follower) $version started at $kafkaId")))
-    version match {
-      case KafkaRuntimeRelease.V_8_2_0 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
-
-      case KafkaRuntimeRelease.V_0_9_0_1 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
-
-      case KafkaRuntimeRelease.V_0_10_0 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
-
-      case KafkaRuntimeRelease.V_0_10_1 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
-
-      case KafkaRuntimeRelease.V_0_10_2 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
-
-      case KafkaRuntimeRelease.V_0_11_0 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
-
-      case KafkaRuntimeRelease.V_0_11_0_1 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[Kafka Server $brokerId], started")).drain ++ output
-
-      case KafkaRuntimeRelease.V_1_0_0 =>
-        followImageLog(kafkaId).takeWhile(! _.contains(s"[KafkaServer id=$brokerId] started")).drain ++ output
-    }
-  }
 
 
 
@@ -276,31 +211,35 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
   }
 
-  /** start 3 node kafka cluster with zookeeper **/
-  def withKafkaCluster(version: KafkaRuntimeRelease.Value): Stream[IO, KafkaNodes] = {
-    Stream.eval_(createNetwork("fs2-kafka-network")) ++
-    Stream.bracket(startZk())(stopImage).flatMap { zkId => {
-        awaitZKStarted(zkId) ++ Stream.sleep_[IO](2.seconds) ++
-        Stream.bracket(startK(version, 1))(stopImage).flatMap { broker1 =>
-          awaitKStarted(version, broker1) ++ Stream.sleep_[IO](2.seconds) ++
-          Stream.bracket(startK(version, 2))(stopImage).flatMap { broker2 =>
-            awaitKFollowerReady(version, broker2, 2) ++ Stream.sleep_[IO](2.seconds) ++
-            Stream.bracket(startK(version, 3))(stopImage).flatMap { broker3 =>
-              awaitKFollowerReady(version, broker3, 3) ++ Stream.sleep_[IO](2.seconds) ++
-              Stream.emit(KafkaNodes(zkId, Map(tag[Broker](1) -> broker1, tag[Broker](2) -> broker2, tag[Broker](3) -> broker3)))
-            }
-          }
-        }
-      }
-    }
-    .onFinalize(removeNetwork("fs2-kafka-network"))
+  // Simplified KafkaNodes for script-based tests
+  case class SimpleKafkaNodes() {
+    // These methods provide compatibility but use fixed container names from scripts
+    def broker1DockerId: String @@ DockerId = tag[DockerId]("broker1")
+    def broker2DockerId: String @@ DockerId = tag[DockerId]("broker2") 
+    def broker3DockerId: String @@ DockerId = tag[DockerId]("broker3")
   }
+
+  /** start 3 node kafka cluster with zookeeper - now uses scripts **/
+  def withKafkaCluster(version: KafkaRuntimeRelease.Value): Stream[IO, KafkaNodes] = {
+    // Note: version parameter is now controlled by environment variables, but we keep method signature for compatibility
+    Stream.eval(startKafkaUsingScript("cluster") >> testKafkaConnectivity()).as(
+      // Create a simple KafkaNodes compatible structure for script-based tests
+      KafkaNodes(
+        tag[DockerId]("script-zk"), 
+        Map(
+          tag[Broker](1) -> tag[DockerId]("broker1"),
+          tag[Broker](2) -> tag[DockerId]("broker2"), 
+          tag[Broker](3) -> tag[DockerId]("broker3")
+        )
+      )
+    ).onFinalize(stopKafkaUsingScript())
+  }
+
 
 
   def publishNMessages(client: KafkaClient[IO],from: Int, to: Int, quorum: Boolean = false): IO[Unit] = {
 
     Stream.range(from, to).evalMap { idx =>
-      println(s"publishing $idx")
       client.publish1(testTopicA, part0, ByteVector(1),  ByteVector(idx), quorum, 10.seconds)
     }
     .compile.drain
@@ -315,14 +254,11 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
 
 
   def killLeader(client: KafkaClient[IO], nodes: KafkaNodes, topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[IO, Nothing] = {
-    client.leaderFor(500.millis)(topic).take(1) map { _((topic, partition)) } flatMap { leader =>
-      println(s"KILLING LEADER: $leader")
-      leader match {
-        case BrokerAddress(_, 9092) => Stream.eval_(killImage(nodes.nodes(tag[Broker](1))))
-        case BrokerAddress(_, 9192) => Stream.eval_(killImage(nodes.nodes(tag[Broker](2))))
-        case BrokerAddress(_, 9292) => Stream.eval_(killImage(nodes.nodes(tag[Broker](3))))
-        case other => Stream.raiseError(new Throwable(s"Unexpected broker: $other"))
-      }
+    client.leaderFor(500.millis)(topic).take(1) map { _((topic, partition)) } flatMap {
+      case BrokerAddress(_, 9092) => Stream.exec(killImage(nodes.nodes(tag[Broker](1))))
+      case BrokerAddress(_, 9192) => Stream.exec(killImage(nodes.nodes(tag[Broker](2))))
+      case BrokerAddress(_, 9292) => Stream.exec(killImage(nodes.nodes(tag[Broker](3))))
+      case other => Stream.raiseError[IO](new Throwable(s"Unexpected broker: $other"))
     }
   }
 

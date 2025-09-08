@@ -4,15 +4,13 @@ import java.util.logging.LogRecord
 
 import cats.effect.Sync
 import fs2._
-import simulacrum.typeclass
-
 import spinoco.fs2.kafka.Logger.Level
 
 /**
   * Logger trait allowing to attach any Logging framework required.
   * Jdk Instance is available
   */
-@typeclass trait Logger[F[_]] {
+trait Logger[F[_]] {
 
   /** performs log on given level. Note that throwable may be null. **/
   def log(level: Level.Value, msg: => String, throwable: Throwable): F[Unit]
@@ -22,6 +20,8 @@ import spinoco.fs2.kafka.Logger.Level
 
 
 object Logger {
+
+  def apply[F[_]](implicit instance: Logger[F]): Logger[F] = instance
 
   object Level extends Enumeration {
     val Trace, Debug, Info, Warn, Error = Value
@@ -60,7 +60,6 @@ object Logger {
         }
       }
     }
-
   }
 
 }

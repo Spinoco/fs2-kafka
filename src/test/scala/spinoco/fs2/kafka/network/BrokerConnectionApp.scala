@@ -1,22 +1,20 @@
 package spinoco.fs2.kafka.network
 
-import java.net.InetSocketAddress
-
-import fs2._
 import cats.effect.IO
+import cats.effect.unsafe.implicits.global
+import fs2._
 import scodec.bits.ByteVector
 import shapeless.tag
 import spinoco.protocol.kafka.Request.RequiredAcks
 import spinoco.protocol.kafka._
 
+import com.comcast.ip4s.{Host, Port, SocketAddress}
 import scala.concurrent.duration._
 
 /**
   * Created by pach on 28/08/16.
   */
 object BrokerConnectionApp extends App {
-
-  import spinoco.fs2.kafka.Fs2KafkaClientResources._
 
   def metadata = {
     val source =
@@ -29,8 +27,8 @@ object BrokerConnectionApp extends App {
         )
       ) ++ Stream.sleep_[IO](10.seconds)
 
-    source.through(BrokerConnection(
-      address = new InetSocketAddress("127.0.0.1", 9092)
+    source.through(BrokerConnection.mk(
+      address = SocketAddress(Host.fromString("127.0.0.1").get, Port.fromInt(9092).get)
     ))
     .evalMap(rcv => IO {
       println(rcv)
@@ -59,8 +57,8 @@ object BrokerConnectionApp extends App {
         )
       ) ++ Stream.sleep_[IO](10.seconds)
 
-    source.through(BrokerConnection(
-      address = new InetSocketAddress("127.0.0.1", 9092)
+    source.through(BrokerConnection.mk(
+      address = SocketAddress(Host.fromString("127.0.0.1").get, Port.fromInt(9092).get)
     ))
     .evalMap(rcv => IO {
       println(rcv)
@@ -88,8 +86,8 @@ object BrokerConnectionApp extends App {
         )
       ) ++ Stream.sleep_[IO](10.seconds)
 
-    source.through(BrokerConnection(
-      address = new InetSocketAddress("127.0.0.1", 9092)
+    source.through(BrokerConnection.mk(
+      address = SocketAddress(Host.fromString("127.0.0.1").get, Port.fromInt(9092).get)
     ))
     .evalMap(rcv => IO {
       println(rcv)
