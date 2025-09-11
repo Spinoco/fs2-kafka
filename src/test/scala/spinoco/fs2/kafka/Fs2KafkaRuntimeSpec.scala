@@ -16,6 +16,18 @@ import scala.concurrent.duration._
 import scala.sys.process.{Process, ProcessLogger}
 import scala.util.Try
 
+// Compatibility object to handle Scala version differences
+object ProcessCompat {
+  import scala.sys.process.ProcessBuilder
+  
+  def getLines(pb: ProcessBuilder): Seq[String] = {
+    // Convert to Seq to avoid Stream deprecation issues
+    val method = pb.getClass.getMethods.find(m => 
+      m.getName == "lazyLines" || m.getName == "lineStream"
+    ).get
+    method.invoke(pb).asInstanceOf[Iterable[String]].toSeq
+  }
+}
 
 object Fs2KafkaRuntimeSpec {
   val ZookeeperImage = "zookeeper:3.8.4"
@@ -207,7 +219,7 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec with IndexedTopicSupport {
   }
 
   def cleanAll: IO[Unit] = IO {
-    val images = Process("docker", Seq("ps", "-qa")).lineStream
+    val images = ProcessCompat.getLines(Process("docker", Seq("ps", "-qa")))
     Try(Process("docker", Seq("kill") ++ images).!!(ProcessLogger(_ => ())))
     Try(Process("docker", Seq("rm") ++ images).!!(ProcessLogger(_ => ())))
     Try(Process("docker", Seq("network", "rm", "fs2-kafka-network") ++ images).!!(ProcessLogger(_ => ())))

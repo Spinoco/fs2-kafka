@@ -1,31 +1,48 @@
+import xerial.sbt.Sonatype.sonatypeCentralHost
+
 val ReleaseTag = """^release/([\d\.]+a?)$""".r
 
 lazy val contributors = Seq(
  "pchlupacek" -> "Pavel Chlupáček"
+  , "mraulim" -> "Milan Raulim"
+  , "AdamChlupacek" -> "Adam Chlupáček"
 )
 
 lazy val commonSettings = Seq(
    organization := "com.spinoco",
-   scalaVersion :=  "2.12.20",
-   crossScalaVersions := Seq( "2.12.20"),
-   scalacOptions ++= Seq(
-    "-feature",
-    "-deprecation",
-    "-language:implicitConversions",
-    "-language:higherKinds",
-    "-language:existentials",
-    "-language:postfixOps",
-    "-Xfatal-warnings",
-    "-Yno-adapted-args",
-    "-Ywarn-value-discard",
-    "-Ywarn-unused-import"
-   ),
+   scalaVersion :=  "2.13.16",
+   crossScalaVersions := Seq("2.12.20", "2.13.16"),
+   scalacOptions := {
+     val common = Seq(
+       "-feature",
+       "-deprecation",
+       "-language:implicitConversions",
+       "-language:higherKinds",
+       "-language:existentials",
+       "-language:postfixOps"
+     )
+     CrossVersion.partialVersion(scalaVersion.value) match {
+       case Some((2, 12)) => common ++ Seq(
+         "-Xfatal-warnings",
+         "-Yno-adapted-args",
+         "-Ywarn-value-discard",
+         "-Ywarn-unused-import"
+       )
+       case Some((2, 13)) => common ++ Seq(
+         "-Xfatal-warnings",
+         "-Wvalue-discard",
+         "-Wunused:imports"
+       )
+       case _ => common ++ Seq("-Xfatal-warnings")
+     }
+   },
    javaOptions += "-Djava.net.preferIPv4Stack=true",
-   scalacOptions in (Compile, console) ~= {_.filterNot("-Ywarn-unused-import" == _)},
+   scalacOptions in (Compile, console) ~= {_.filterNot(opt => opt == "-Ywarn-unused-import" || opt == "-Wunused:imports")},
    scalacOptions in (Test, console) := (scalacOptions in (Compile, console)).value,
    libraryDependencies ++= Seq(
-    "org.scalatest" %% "scalatest" % "3.0.0" % "test"
-    , "org.scalacheck" %% "scalacheck" % "1.13.4" % "test"
+    "org.scalatest" %% "scalatest" % "3.1.4" % "test"
+    , "org.scalacheck" %% "scalacheck" % "1.14.3" % "test"
+    , "org.scalatestplus" %% "scalacheck-1-14" % "3.1.4.0" % "test"
     , "co.fs2" %% "fs2-core" % "3.12.2"
     , "co.fs2" %% "fs2-io" % "3.12.2"
     , "com.spinoco" %% "protocol-kafka" % "0.5.1"
@@ -63,41 +80,27 @@ lazy val scaladocSettings = Seq(
 )
 
 lazy val publishingSettings = Seq(
-  publishTo := {
-   val nexus = "https://oss.sonatype.org/"
-   if (version.value.trim.endsWith("SNAPSHOT"))
-     Some("snapshots" at nexus + "content/repositories/snapshots")
-   else
-     Some("releases" at nexus + "service/local/staging/deploy/maven2")
-  },
-  credentials ++= (for {
-   username <- Option(System.getenv().get("SONATYPE_USERNAME"))
-   password <- Option(System.getenv().get("SONATYPE_PASSWORD"))
-  } yield Credentials("Sonatype Nexus Repository Manager", "oss.sonatype.org", username, password)).toSeq,
-  publishMavenStyle := true,
-  pomIncludeRepository := { _ => false },
-  pomExtra := {
-    <url>https://github.com/Spinoco/fs2-kafka</url>
-    <developers>
-      {for ((username, name) <- contributors) yield
-      <developer>
-        <id>{username}</id>
-        <name>{name}</name>
-        <url>http://github.com/{username}</url>
-      </developer>
-      }
-    </developers>
-  },
-  pomPostProcess := { node =>
-   import scala.xml._
-   import scala.xml.transform._
-   def stripIf(f: Node => Boolean) = new RewriteRule {
-     override def transform(n: Node) =
-       if (f(n)) NodeSeq.Empty else n
-   }
-   val stripTestScope = stripIf { n => n.label == "dependency" && (n \ "scope").text == "test" }
-   new RuleTransformer(stripTestScope).transform(node)(0)
-  }
+  sonatypeCredentialHost := sonatypeCentralHost,
+  publishTo := sonatypePublishToBundle.value,
+  versionScheme := Some("early-semver"),
+  organization := "com.spinoco",
+  homepage := Some(url("https://github.com/spinoco/fs2-kafka")),
+  licenses := List("MIT" -> url("http://opensource.org/licenses/MIT")),
+  developers := {
+    for ((username, name) <- contributors) yield
+      Developer(
+        username,
+        name,
+        "",
+        url(s"https://github.com/$username")
+      )
+  }.toList,
+  scmInfo := Some(
+    ScmInfo(
+      url("https://github.com/spinoco/fs2-kafka"),
+      "scm:git@github.com:spinoco/fs2-kafka.git"
+    )
+  )
 )
 
 lazy val releaseSettings = Seq(

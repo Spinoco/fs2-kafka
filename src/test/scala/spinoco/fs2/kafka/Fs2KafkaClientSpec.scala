@@ -4,8 +4,9 @@ import java.nio.channels.AsynchronousChannelGroup
 import java.util.concurrent.Executors
 
 import org.scalatest.concurrent.{Eventually, TimeLimitedTests}
-import org.scalatest.{FreeSpec, Matchers}
-import org.scalatest.prop.GeneratorDrivenPropertyChecks
+import org.scalatest.freespec.AnyFreeSpec
+import org.scalatest.matchers.should.Matchers
+import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks
 import org.scalatest.time.SpanSugar._
 
 
@@ -15,8 +16,8 @@ object Fs2KafkaClientResources {
 
 }
 
-class Fs2KafkaClientSpec extends FreeSpec
-  with GeneratorDrivenPropertyChecks
+class Fs2KafkaClientSpec extends AnyFreeSpec
+  with ScalaCheckDrivenPropertyChecks
   with Matchers
   with TimeLimitedTests
   with Eventually {

@@ -26,7 +26,7 @@ class KafkaClientPublishSpec extends Fs2KafkaSingleBrokerSpec {
 
         publish() ++
         Stream.sleep[IO](2.second) >> // wait for message to be accepted
-        kafkaClient.subscribe(topic, part0, offset(0l)).take(10)
+        kafkaClient.subscribe(topic, part0, offset(0L)).take(10)
       }.compile.toVector.unsafeRunTimed(60.seconds).map(_.size) shouldBe Some(10)
     }
 
@@ -39,7 +39,7 @@ class KafkaClientPublishSpec extends Fs2KafkaSingleBrokerSpec {
 
       withKafkaSingle { kc =>
           publish(kc) ++
-          (kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_)))
+          (kc.subscribe(testTopicA, part0, offset(0L)) map (Right(_)))
       }.take(20).compile.toVector.unsafeRunTimed(60.seconds) shouldBe Some {
         (for { idx <- 0 until 10} yield Left(offset(idx))).toVector ++
         (for { idx <- 0 until 10} yield Right(TopicMessage(offset(idx), ByteVector(1), ByteVector(idx), offset(10)))).toVector
@@ -57,7 +57,7 @@ class KafkaClientPublishSpec extends Fs2KafkaSingleBrokerSpec {
       withKafkaSingle { kc =>
         publish(kc) ++
         Stream.sleep[IO](3.second) >> // wait for message to be accepted
-        kc.subscribe(testTopicA, part0, offset(0l)).take(100)
+        kc.subscribe(testTopicA, part0, offset(0L)).take(100)
       }.compile.toVector.unsafeRunTimed(60.seconds).map(_.size) shouldBe Some(100)
 
     }
@@ -72,7 +72,7 @@ class KafkaClientPublishSpec extends Fs2KafkaSingleBrokerSpec {
 
       withKafkaSingle { kc =>
         publish(kc) ++
-        (kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_)))
+        (kc.subscribe(testTopicA, part0, offset(0L)) map (Right(_)))
       }.take(110).compile.toVector.unsafeRunTimed(60.seconds) shouldBe Some {
         (for { idx <- 0 until 10} yield Left(offset(idx*10))).toVector ++
         (for { idx <- 0 until 100} yield Right(TopicMessage(offset(idx), ByteVector(idx % 10), ByteVector(idx / 10), offset(100)))).toVector
@@ -90,7 +90,7 @@ class KafkaClientPublishSpec extends Fs2KafkaSingleBrokerSpec {
       withKafkaSingle { kc =>
         publish(kc) ++
         Stream.sleep[IO](3.second) >> // wait for message to be accepted
-        kc.subscribe(testTopicA, part0, offset(0l)).take(100)
+        kc.subscribe(testTopicA, part0, offset(0L)).take(100)
       }.compile.toVector.unsafeRunTimed(60.seconds).map(_.size) shouldBe Some(100)
 
     }
@@ -105,7 +105,7 @@ class KafkaClientPublishSpec extends Fs2KafkaSingleBrokerSpec {
 
       withKafkaSingle { kc =>
         publish(kc) ++
-        ((kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_))) take 100)
+        ((kc.subscribe(testTopicA, part0, offset(0L)) map (Right(_))) take 100)
       }.compile.toVector.unsafeRunTimed(60.seconds) shouldBe Some {
         (for { idx <- 0 until 10} yield Left(offset(idx*10))).toVector ++
         (for { idx <- 0 until 100} yield Right(TopicMessage(offset(idx), ByteVector(idx % 10), ByteVector(idx / 10), offset(100)))).toVector
@@ -122,7 +122,7 @@ class KafkaClientPublishSpec extends Fs2KafkaSingleBrokerSpec {
 
       withKafkaSingle { kc =>
         publish(kc) ++
-        ((kc.subscribe(testTopicA, part0, offset(5l)) map (Right(_)))  take 95)
+        ((kc.subscribe(testTopicA, part0, offset(5L)) map (Right(_)))  take 95)
       }.compile.toVector.unsafeRunTimed(60.seconds) shouldBe Some {
         (for { idx <- 0 until 10} yield Left(offset(idx*10))).toVector ++
         (for { idx <- 0 until 100} yield Right(TopicMessage(offset(idx), ByteVector(idx % 10), ByteVector(idx / 10), offset(100)))).drop(5).toVector
@@ -140,7 +140,7 @@ class KafkaClientPublishSpec extends Fs2KafkaSingleBrokerSpec {
       withKafkaSingle { kc =>
         publish(kc) ++
         Stream.sleep[IO](3.second) >> // wait for message to be accepted
-        kc.subscribe(testTopicA, part0, offset(0l)).take(100)
+        kc.subscribe(testTopicA, part0, offset(0L)).take(100)
       }.compile.toVector.unsafeRunTimed(60.seconds).map(_.size) shouldBe Some(100)
 
     }
@@ -155,7 +155,7 @@ class KafkaClientPublishSpec extends Fs2KafkaSingleBrokerSpec {
 
       withKafkaSingle { kc =>
         publish(kc) ++
-        ((kc.subscribe(testTopicA, part0, offset(0l)) map (Right(_))) take 100)
+        ((kc.subscribe(testTopicA, part0, offset(0L)) map (Right(_))) take 100)
       }.compile.toVector.unsafeRunTimed(60.seconds) shouldBe Some {
         (for { idx <- 0 until 10} yield Left(offset(idx*10))).toVector ++
         (for { idx <- 0 until 100} yield Right(TopicMessage(offset(idx), ByteVector(idx % 10), ByteVector(idx / 10), offset(100)))).toVector

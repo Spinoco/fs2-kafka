@@ -14,7 +14,7 @@ import scala.sys.process.{Process, ProcessLogger}
   *Various helpers for interacting with docker instance
   */
 object DockerSupport {
-  val ExtractVersion = """Docker version ([0-9\.\-a-z]+), build ([0-9a-fA-F]+).*""".r("version", "build")
+  val ExtractVersion = """Docker version (?<version>[0-9\.\-a-z]+), build (?<build>[0-9a-fA-F]+).*""".r
   sealed trait DockerId
 
   /** Returns version of docker, if that docker is available. **/
@@ -67,7 +67,7 @@ object DockerSupport {
         semaphore.release >>
         isDone.get.flatMap { done => if (!done) q.offer(s).void else IO.unit } >>
         semaphore.acquire
-      } unsafeRunSync
+      }.unsafeRunSync()
 
       val logger = new ProcessLogger {
         def buffer[T](f: => T): T = f

@@ -49,7 +49,7 @@ object BrokerConnectionApp extends App {
             , messages = Vector(
               (tag[TopicName]("test"), Vector(
                 (tag[PartitionId](0), Vector(
-                  Message.SingleMessage(0l,MessageVersion.V0,None,ByteVector(1,2,3), ByteVector(5,6,7,8))
+                  Message.SingleMessage(0L,MessageVersion.V0,None,ByteVector(1,2,3), ByteVector(5,6,7,8))
                 ))
               ))
             )

@@ -32,7 +32,7 @@ class BrokerConnection10Spec extends BrokerConnectionKafkaSpecBase {
               , request = ProduceRequest(
                 requiredAcks = RequiredAcks.LocalOnly
                 , timeout = 10.seconds
-                , messages = Vector((testTopic1, Vector((part0, Vector(SingleMessage(0l, MessageVersion.V0, None, ByteVector(1, 2, 3), ByteVector(5, 6, 7)))))))
+                , messages = Vector((testTopic1, Vector((part0, Vector(SingleMessage(0L, MessageVersion.V0, None, ByteVector(1, 2, 3), ByteVector(5, 6, 7)))))))
               )
             )
           ) ++ Stream.sleep_[IO](1.minute))
