@@ -10,7 +10,9 @@ This directory contains scripts to manage Kafka and ZooKeeper containers for fs2
 
 ## Scripts
 
-### `start-kafka.sh`
+### Core Scripts
+
+#### `start-kafka.sh`
 
 Starts Kafka and ZooKeeper containers for testing.
 
@@ -48,7 +50,7 @@ Starts Kafka and ZooKeeper containers for testing.
 - Creates default test topic `test-topic-A`
 - Uses Intel platform (`--platform linux/amd64`) for Apple Silicon compatibility
 
-### `stop-kafka.sh`
+#### `stop-kafka.sh`
 
 Stops and cleans up all Kafka and ZooKeeper containers.
 
@@ -65,7 +67,7 @@ Stops and cleans up all Kafka and ZooKeeper containers.
 - Cleans up orphaned containers
 - Shows final status
 
-### `test-kafka.sh`
+#### `test-kafka.sh`
 
 Tests Kafka connectivity and basic operations.
 
@@ -81,6 +83,90 @@ Tests Kafka connectivity and basic operations.
 - Topic creation and listing
 - Message production
 - Clean up test artifacts
+
+### Development Helper Scripts
+
+#### `kafka-dev.sh` - All-in-One Development Helper
+
+The most convenient script for daily development work. Provides a unified interface for all Kafka operations.
+
+**Usage:**
+```bash
+./kafka-dev.sh [command] [options]
+```
+
+**Common Commands:**
+```bash
+# Quick start/stop
+./kafka-dev.sh start                    # Start single broker
+./kafka-dev.sh start cluster            # Start 3-broker cluster  
+./kafka-dev.sh stop                     # Stop everything
+./kafka-dev.sh restart                  # Restart with same config
+
+# Status and monitoring
+./kafka-dev.sh status                   # Detailed system status
+./kafka-dev.sh test                     # Run connectivity tests
+./kafka-dev.sh logs                     # Show all container logs
+./kafka-dev.sh logs broker1             # Show specific container logs
+
+# Topic management
+./kafka-dev.sh topic create my-topic                # Create topic (1 partition, 1 replica)
+./kafka-dev.sh topic create my-topic 3 2           # Create with 3 partitions, 2 replicas  
+./kafka-dev.sh topic list                          # List all topics
+./kafka-dev.sh topic describe                      # Describe all topics
+./kafka-dev.sh topic describe my-topic             # Describe specific topic
+./kafka-dev.sh topic delete my-topic               # Delete topic
+
+# Cleanup
+./kafka-dev.sh clean                    # Full cleanup (includes Docker volumes)
+```
+
+#### `kafka-status.sh` - Detailed Status Checker
+
+Shows comprehensive status of all Kafka components.
+
+**Usage:**
+```bash
+./kafka-status.sh [--verbose]
+```
+
+**What it shows:**
+- Container status (running/stopped)
+- Network connectivity
+- Port availability  
+- ZooKeeper health
+- Kafka broker responsiveness
+- Topic listing
+- Verbose mode: detailed Docker information
+
+**Examples:**
+```bash
+./kafka-status.sh                      # Basic status check
+./kafka-status.sh --verbose            # Detailed status with Docker info
+```
+
+#### `kafka-quick-test.sh` - Fast Functionality Test
+
+Quickly verifies Kafka is working by testing basic produce/consume operations.
+
+**Usage:**
+```bash
+./kafka-quick-test.sh [broker] [--cleanup]
+```
+
+**What it tests:**
+- Creates a temporary test topic
+- Produces a test message
+- Consumes and verifies the message
+- Checks topic listing
+- Optionally tests cluster replication (if cluster mode detected)
+
+**Examples:**
+```bash
+./kafka-quick-test.sh                          # Test with default broker (localhost:9092)
+./kafka-quick-test.sh --cleanup                # Test and cleanup test topic afterward
+./kafka-quick-test.sh localhost:9192          # Test specific broker
+```
 
 ## Docker Configuration
 
@@ -186,4 +272,48 @@ For cluster testing:
 ./test-kafka.sh
 # sbt 'testOnly *ClusterSpec'
 ./stop-kafka.sh
+```
+
+## Development Workflow Examples
+
+### Using the Development Helper (Recommended)
+
+**Quick single broker development:**
+```bash
+./kafka-dev.sh start                    # Start Kafka
+./kafka-quick-test.sh                  # Verify it's working
+./kafka-dev.sh topic create my-test     # Create your test topic
+# Run your fs2-kafka tests here
+./kafka-dev.sh logs broker1             # Check logs if needed
+./kafka-dev.sh stop                     # Clean shutdown
+```
+
+**Cluster development:**
+```bash
+./kafka-dev.sh start cluster            # Start 3-broker cluster
+./kafka-dev.sh status                   # Check cluster health
+./kafka-dev.sh topic create replicated-topic 1 3  # Create replicated topic
+# Run your cluster tests here
+./kafka-dev.sh clean                    # Full cleanup
+```
+
+**Daily development cycle:**
+```bash
+./kafka-dev.sh start                    # Morning: start Kafka
+# ... develop and test throughout the day ...
+./kafka-dev.sh restart                  # Clean slate if needed
+# ... more development ...
+./kafka-dev.sh stop                     # Evening: clean shutdown
+```
+
+### Using Individual Scripts
+
+**Traditional approach (more control):**
+```bash
+./stop-kafka.sh                        # Clean slate
+./start-kafka.sh single 1.0.0          # Start specific version
+./test-kafka.sh                        # Verify connectivity
+# Run your tests
+./kafka-status.sh --verbose            # Check detailed status
+./stop-kafka.sh                        # Cleanup
 ```

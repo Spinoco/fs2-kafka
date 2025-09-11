@@ -1,6 +1,7 @@
 package spinoco.fs2.kafka
 
 import cats.effect.IO
+import cats.effect.unsafe.implicits.global
 import fs2._
 import org.scalatest.{Args, Status}
 import scodec.bits.ByteVector
@@ -10,6 +11,7 @@ import spinoco.fs2.kafka.network.BrokerAddress
 import spinoco.protocol.kafka.{Broker, PartitionId, ProtocolVersion, TopicName}
 
 import java.net.InetAddress
+import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent.duration._
 import scala.sys.process.{Process, ProcessLogger}
 import scala.util.Try
@@ -45,12 +47,40 @@ object KafkaRuntimeRelease extends Enumeration {
   }
 }
 
+/**
+ * Trait that provides indexed topic naming for test isolation and inspection.
+ * Each test gets a unique topic with format: test-topic-{ClassName}-{index}
+ */
+trait IndexedTopicSupport {
+  private val testIndex = new AtomicInteger(0)
+  
+  def nextTopicIndex(): String = f"${testIndex.incrementAndGet()}%03d"
+  
+  def indexedTopic(): String @@ TopicName = {
+    val className = this.getClass.getSimpleName
+    val index = nextTopicIndex()
+    tag[TopicName](s"test-topic-$className-$index")
+  }
+  
+  // Helper method to create topic on running Kafka instance
+  def createIndexedTopic(topicName: String @@ TopicName, partitions: Int = 1, replicationFactor: Int = 1): IO[Unit] = {
+    import scala.sys.process._
+    IO {
+      val command = s"docker exec broker1 kafka-topics.sh --create --topic $topicName --partitions $partitions --replication-factor $replicationFactor --zookeeper zookeeper:2181"
+      val result = command.!
+      if (result != 0) {
+        // Topic might already exist, which is fine for our use case
+        println(s"Note: Topic creation for $topicName returned exit code: $result (topic may already exist)")
+      }
+    }
+  }
+}
 
 /**
   * Specification that will start kafka runtime before tests are performed.
   * Note that data are contained withing docker images, so once the image stops, the data needs to be recreated.
   */
-class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
+class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec with IndexedTopicSupport {
   import DockerSupport._
 
   val runtime: KafkaRuntimeRelease.Value = Option(System.getenv().get("KAFKA_TEST_RUNTIME")).map(KafkaRuntimeRelease.withName).getOrElse(KafkaRuntimeRelease.V_1_0_0)
@@ -277,4 +307,58 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec {
      try super.runTest(testName, args)
      finally println(s"Stopping: $testName")
    }
+}
+
+/**
+ * Base class for tests that use a single Kafka broker.
+ * Assumes Kafka is already running at 172.30.0.11:9092.
+ * For local development: start with ./scripts/start-kafka.sh single
+ * For CI: Kafka management is handled by CI steps
+ */
+abstract class Fs2KafkaSingleBrokerSpec extends Fs2KafkaRuntimeSpec {
+  
+  // Pre-configured client for single broker setup
+  lazy val kafkaClient: KafkaClient[IO] = {
+    KafkaClient.client[IO](Set(localBroker1_9092), protocol, "test-client")
+      .allocated.unsafeRunSync()._1
+  }
+  
+  // Helper to create topic and ensure it exists
+  def withIndexedTopic[A](f: (String @@ TopicName) => IO[A]): IO[A] = {
+    val topic = indexedTopic()
+    createIndexedTopic(topic) >> f(topic)
+  }
+  
+  // Helper for tests that return Stream
+  def withIndexedTopicStream[A](f: (String @@ TopicName) => Stream[IO, A]): Stream[IO, A] = {
+    val topic = indexedTopic()
+    Stream.eval(createIndexedTopic(topic)) >> f(topic)
+  }
+}
+
+/**
+ * Base class for tests that use a Kafka cluster.
+ * Assumes Kafka cluster is already running at 172.30.0.11-13.
+ * For local development: start with ./scripts/start-kafka.sh cluster
+ * For CI: Kafka management is handled by CI steps
+ */
+abstract class Fs2KafkaClusterSpec extends Fs2KafkaRuntimeSpec {
+  
+  // Pre-configured client for cluster setup
+  lazy val kafkaClient: KafkaClient[IO] = {
+    KafkaClient.client[IO](localCluster, protocol, "test-client")
+      .allocated.unsafeRunSync()._1
+  }
+  
+  // Helper to create replicated topic and ensure it exists
+  def withIndexedTopic[A](replicationFactor: Int = 3)(f: (String @@ TopicName) => IO[A]): IO[A] = {
+    val topic = indexedTopic()
+    createIndexedTopic(topic, partitions = 1, replicationFactor) >> f(topic)
+  }
+  
+  // Helper for tests that return Stream
+  def withIndexedTopicStream[A](replicationFactor: Int = 3)(f: (String @@ TopicName) => Stream[IO, A]): Stream[IO, A] = {
+    val topic = indexedTopic()
+    Stream.eval(createIndexedTopic(topic, partitions = 1, replicationFactor)) >> f(topic)
+  }
 }

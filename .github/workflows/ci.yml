@@ -7,7 +7,7 @@ on:
     branches: [ main, series/* ]
 
 jobs:
-  test:
+  single-broker-tests:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -22,7 +22,7 @@ jobs:
         java-version: [8, 11, 17, 21]
         scala-version: ["2.12.20"]
 
-    name: Test ${{ matrix.kafka-version.name }} on Java ${{ matrix.java-version }} / Scala ${{ matrix.scala-version }}
+    name: Single Broker Tests - ${{ matrix.kafka-version.name }} on Java ${{ matrix.java-version }} / Scala ${{ matrix.scala-version }}
 
     steps:
     - name: Checkout code
@@ -46,7 +46,7 @@ jobs:
           ~/.coursier/cache
           target
           project/target
-        key: ${{ runner.os }}-sbt-${{ hashFiles('**/*.sbt', 'project/build.properties', 'project/plugins.sbt') }}
+        key: ${{ runner.os }}-sbt-single-${{ hashFiles('**/*.sbt', 'project/build.properties', 'project/plugins.sbt') }}
         restore-keys: |
           ${{ runner.os }}-sbt-
 
@@ -64,23 +64,113 @@ jobs:
     - name: Compile tests
       run: sbt test:compile
 
-    - name: Run tests
+    - name: Start Kafka (Single Broker)
+      run: ./scripts/start-kafka.sh single ${{ matrix.kafka-version.kafka-docker-version }}
+
+    - name: Wait for Kafka readiness
+      run: ./scripts/test-kafka.sh
+
+    - name: Run Single Broker Tests
       env:
         KAFKA_TEST_RUNTIME: ${{ matrix.kafka-version.runtime }}
+        KAFKA_MANAGED_EXTERNALLY: true
       run: |
-        # Run tests with timeout to prevent hanging
-        timeout 30m sbt test || {
-          echo "Tests timed out or failed, checking containers..."
+        timeout 30m sbt "testOnly spinoco.fs2.kafka.KafkaClient*" || {
+          echo "Single broker tests failed, checking containers..."
           docker ps -a
           docker logs broker1 || true
           docker logs zookeeper || true
           exit 1
         }
 
-    - name: Cleanup Docker containers
+    - name: Stop Kafka
       if: always()
       run: |
-        # Cleanup any remaining containers
+        ./scripts/stop-kafka.sh || true
+        docker ps -a
+        docker system prune -f || true
+
+  cluster-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        kafka-version:
+          - name: "Kafka 0.10.2"
+            runtime: "V_0_10_2"
+            kafka-docker-version: "0.10.2.0"
+          - name: "Kafka 1.0.0"
+            runtime: "V_1_0_0"
+            kafka-docker-version: "1.0.0"
+        java-version: [8, 11, 17, 21]
+        scala-version: ["2.12.20"]
+
+    name: Cluster Tests - ${{ matrix.kafka-version.name }} on Java ${{ matrix.java-version }} / Scala ${{ matrix.scala-version }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK ${{ matrix.java-version }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ matrix.java-version }}
+        distribution: 'temurin'
+
+    - name: Setup sbt
+      uses: sbt/setup-sbt@v1
+
+    - name: Cache sbt dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.sbt
+          ~/.ivy2/cache
+          ~/.coursier/cache
+          target
+          project/target
+        key: ${{ runner.os }}-sbt-cluster-${{ hashFiles('**/*.sbt', 'project/build.properties', 'project/plugins.sbt') }}
+        restore-keys: |
+          ${{ runner.os }}-sbt-
+
+    - name: Setup Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Make scripts executable
+      run: |
+        chmod +x scripts/*.sh
+        ls -la scripts/
+
+    - name: Compile project
+      run: sbt compile
+
+    - name: Compile tests
+      run: sbt test:compile
+
+    - name: Start Kafka (Cluster)
+      run: ./scripts/start-kafka.sh cluster ${{ matrix.kafka-version.kafka-docker-version }}
+
+    - name: Wait for Cluster readiness
+      run: ./scripts/test-kafka.sh
+
+    - name: Run Cluster Tests
+      env:
+        KAFKA_TEST_RUNTIME: ${{ matrix.kafka-version.runtime }}
+        KAFKA_MANAGED_EXTERNALLY: true
+      run: |
+        timeout 30m sbt "testOnly spinoco.fs2.kafka.KafkaCluster*" || {
+          echo "Cluster tests failed, checking containers..."
+          docker ps -a
+          docker logs broker1 || true
+          docker logs broker2 || true
+          docker logs broker3 || true
+          docker logs zookeeper || true
+          exit 1
+        }
+
+    - name: Stop Kafka
+      if: always()
+      run: |
         ./scripts/stop-kafka.sh || true
         docker ps -a
         docker system prune -f || true

@@ -11,25 +11,23 @@ import scala.concurrent.duration._
 
 
 
-class KafkaClientPublishSpec extends Fs2KafkaRuntimeSpec {
+class KafkaClientPublishSpec extends Fs2KafkaSingleBrokerSpec {
 
 
   s"single-broker" - {
 
     "publish-unsafe" in {
+      withIndexedTopicStream { topic =>
+        def publish() = {
+          Stream.range(0, 10) evalMap { idx =>
+            kafkaClient.publishUnsafe1(topic, part0, ByteVector(1),  ByteVector(idx))
+          } drain
+        }
 
-      def publish(kc: KafkaClient[IO]) = {
-        Stream.range(0, 10) evalMap { idx =>
-          kc.publishUnsafe1(testTopicA, part0, ByteVector(1),  ByteVector(idx))
-        } drain
-      }
-
-      withKafkaSingle { kc =>
-        publish(kc) ++
+        publish() ++
         Stream.sleep[IO](2.second) >> // wait for message to be accepted
-        kc.subscribe(testTopicA, part0, offset(0l)).take(10)
+        kafkaClient.subscribe(topic, part0, offset(0l)).take(10)
       }.compile.toVector.unsafeRunTimed(60.seconds).map(_.size) shouldBe Some(10)
-
     }
 
     "publish-response" in {
