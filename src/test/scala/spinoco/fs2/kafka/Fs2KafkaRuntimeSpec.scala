@@ -283,12 +283,24 @@ class Fs2KafkaRuntimeSpec extends Fs2KafkaClientSpec with IndexedTopicSupport {
   }
 
 
-  def killLeader(client: KafkaClient[IO], nodes: KafkaNodes, topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[IO, Nothing] = {
-    client.leaderFor(500.millis)(topic).take(1) map { _((topic, partition)) } flatMap {
-      case BrokerAddress(_, 9092) => Stream.exec(killImage(nodes.nodes(tag[Broker](1))))
-      case BrokerAddress(_, 9192) => Stream.exec(killImage(nodes.nodes(tag[Broker](2))))
-      case BrokerAddress(_, 9292) => Stream.exec(killImage(nodes.nodes(tag[Broker](3))))
-      case other => Stream.raiseError[IO](new Throwable(s"Unexpected broker: $other"))
+  def killLeader(client: KafkaClient[IO], topic: String @@ TopicName, partition: Int @@ PartitionId): Stream[IO, BrokerAddress] = {
+    client.leaderFor(500.millis)(topic).take(1).map(_((topic, partition))).flatMap { leader =>
+      val containerName = leader match {
+        case BrokerAddress(_, 9092) => "broker1"
+        case BrokerAddress(_, 9192) => "broker2" 
+        case BrokerAddress(_, 9292) => "broker3"
+        case other => throw new RuntimeException(s"Unexpected broker address: $other")
+      }
+      
+      Stream.exec(IO {
+        import scala.sys.process._
+        println(s"Killing leader broker: $containerName (${leader})")
+        val result = s"docker kill $containerName".!
+        if (result != 0) {
+          throw new RuntimeException(s"Failed to kill broker $containerName (exit code: $result)")
+        }
+        println(s"Successfully killed leader broker: $containerName")
+      }).as(leader)
     }
   }
 

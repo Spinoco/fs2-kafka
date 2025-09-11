@@ -64,8 +64,8 @@ class KafkaClusterSubscribeSpec extends Fs2KafkaClusterSpec {
           Stream.eval(publishMessages(0, 20)) >>
           Stream(
             kafkaClient.subscribe(topic, part0, HeadOffset)
-            // Note: killLeader functionality removed as it requires Docker container management
-            // This test now focuses on basic leader election and failover scenarios
+            , Stream.sleep[IO](5.seconds) >>
+              killLeader(kafkaClient, topic, part0).drain
             , Stream.sleep[IO](10.seconds) >>
               awaitNewLeaderAvailable(kafkaClient, topic, part0, leader) >>
               Stream.sleep[IO](3.seconds) >>
