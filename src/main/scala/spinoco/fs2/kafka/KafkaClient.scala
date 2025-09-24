@@ -196,15 +196,12 @@ object KafkaClient {
   @inline def apply[F[_]](implicit instance: KafkaClient[F]): KafkaClient[F] = instance
 
   /**
-   * Build a stream, that when run will produce single kafka client.
-   *
    * Initially client spawns connections to nodes specified in ensemble and queries them for the topology.
    * After topology is known, it then initiates connection to each Kafka Broker listed in topology.
    * That connection is then used to publish messages to topic/partition that given broker is leader of.
    *
    * For the subscription client always initiate separate connections to 'followers'. Only in such case there is
    * no ISR (follower) available client initiate subscribe connection to 'leader'.
-   *
    *
    * Client automatically reacts and recovers from any topology changes that may occur in ensemble:
    *   - When the leader is changed, the publish requests goes to newly designated leader.
@@ -493,9 +490,7 @@ object KafkaClient {
       , clientId: String
     )(address: BrokerAddress): Pipe[F, OffsetsRequest, OffsetResponse] = { s =>
       (s.zip(indexer) map { case (request, idx) =>
-
-        val msg = RequestMessage(version, idx, clientId, request)
-        msg
+        RequestMessage(version, idx, clientId, request)
       } through brokerConnection(address)) flatMap { resp => resp.response match {
         case offset: OffsetResponse => Stream.emit(offset)
         case _ => Stream.raiseError[F](UnexpectedResponse(address, resp))
@@ -602,8 +597,8 @@ object KafkaClient {
                       val removeHead = messages.dropWhile(_.offset < thisChunkStart)
 
                       updateLastKnown ++ {
-                        if (prefetch) Stream.eval(requestNextChunk).drain ++ Stream.emits(removeHead)
-                        else Stream.emits(removeHead) ++ Stream.eval(requestNextChunk).drain
+                        if (prefetch) Stream.exec(requestNextChunk.void) ++ Stream.emits(removeHead)
+                        else Stream.emits(removeHead) ++ Stream.exec(requestNextChunk.void)
                       }
                   }
               }
