@@ -46,6 +46,10 @@ class QueryOffsetRangeSpec extends Fs2KafkaClientSpec {
     OffsetResponse(Vector((testTopic, Vector(PartitionOffsetResponse(part0, None, new Date(0), Vector(offset(head), offset(10)))))))
   }
 
+  val notLeader: OffsetResponse = {
+    OffsetResponse(Vector((testTopic, Vector(PartitionOffsetResponse(part0, Some(ErrorType.NOT_LEADER_FOR_PARTITION), new Date(0), Vector.empty)))))
+  }
+
   def offsetConnection(dns: Ref[IO, Set[String]])(address: BrokerAddress): Pipe[IO, OffsetsRequest, OffsetResponse] =
     _.evalMap { _ => resolve(dns, address) as offsetsFrom(address) }
 
@@ -95,15 +99,56 @@ class QueryOffsetRangeSpec extends Fs2KafkaClientSpec {
       result.left.toOption.map(_.getClass) shouldBe Some(classOf[UnknownHostException])
     }
 
-    "does not retry error reported by broker" in {
-      val failure = OffsetResponse(Vector((testTopic, Vector(PartitionOffsetResponse(part0, Some(ErrorType.UNKNOWN), new Date(0), Vector.empty)))))
-      val result = {
-        run(queryOffsetRange((_, _) => IO.pure(Some(seedA)), _ => _.map(_ => failure)).attempt)
-      }
-      result.left.toOption.collect { case BrokerReportedFailure(_, _, err) => err } shouldBe Some(ErrorType.UNKNOWN)
+    // (reported error, number of queries made)
+    def queryFailingWith(error: ErrorType.Value): (Option[ErrorType.Value], Int) = {
+      val failure = OffsetResponse(Vector((testTopic, Vector(PartitionOffsetResponse(part0, Some(error), new Date(0), Vector.empty)))))
+      run(Ref.of[IO, Int](0) flatMap { queries =>
+        queryOffsetRange((_, _) => IO.pure(Some(seedA)), _ => _.evalMap(_ => queries.update(_ + 1) as failure)).attempt flatMap { result =>
+          queries.get map { n => (result.left.toOption.collect { case BrokerReportedFailure(_, _, err) => err }, n) }
+        }
+      })
     }
 
-    "fails when no leader is known" in {
+    "does not retry missing topic authorization" in {
+      queryFailingWith(ErrorType.TOPIC_AUTHORIZATION_FAILED) shouldBe ((Some(ErrorType.TOPIC_AUTHORIZATION_FAILED), 2))
+    }
+
+    "retries other error reported by broker, then fails with it" in {
+      queryFailingWith(ErrorType.UNKNOWN_TOPIC_OR_PARTITION) shouldBe ((Some(ErrorType.UNKNOWN_TOPIC_OR_PARTITION), 2 * 20))
+    }
+
+    "follows leader change when broker reports it is not the leader" in {
+      val result = {
+        run(mkDns("broker-a", "broker-b") flatMap { dns =>
+          Ref.of[IO, Int](0) flatMap { lookups =>
+            def getLeader(topicId: String @@ TopicName, partition: Int @@ PartitionId): IO[Option[BrokerAddress]] = {
+              lookups.getAndUpdate(_ + 1) map { n => if (n == 0) Some(seedA) else Some(seedB) }
+            }
+            def connection(address: BrokerAddress): Pipe[IO, OffsetsRequest, OffsetResponse] = {
+              if (address == seedA) _.map(_ => notLeader) else offsetConnection(dns)(address)
+            }
+            queryOffsetRange(getLeader, connection)
+          }
+        })
+      }
+      result shouldBe ((2L, 10L))
+    }
+
+    "waits until leader is elected" in {
+      val result = {
+        run(mkDns("broker-a") flatMap { dns =>
+          Ref.of[IO, Int](0) flatMap { lookups =>
+            def getLeader(topicId: String @@ TopicName, partition: Int @@ PartitionId): IO[Option[BrokerAddress]] = {
+              lookups.getAndUpdate(_ + 1) map { n => if (n < 3) None else Some(seedA) }
+            }
+            queryOffsetRange(getLeader, offsetConnection(dns))
+          }
+        })
+      }
+      result shouldBe ((1L, 10L))
+    }
+
+    "fails when no leader is ever known" in {
       run(queryOffsetRange((_, _) => IO.pure(None), _ => _ => Stream.empty).attempt) shouldBe Left(LeaderNotAvailable(testTopic, part0))
     }
 

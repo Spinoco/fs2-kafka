@@ -459,7 +459,6 @@ object KafkaClient {
 
     val consumerBrokerId = tag[Broker](-1)
 
-
     /**
       * Augments connection to broker to FetchRequest/FetchResponse pattern.
       *
@@ -708,7 +707,8 @@ object KafkaClient {
       * @param partition            Id of the partition
       * @param getLeader            Queries leader for the partition supplied
       * @param brokerOffsetConnection     A function to create connection to broker to send // receive OffsetRequests
-      * @param leaderFailureTimeout When connection to the leader fails, wait this long, then query the leader again and retry
+      * @param leaderFailureTimeout When the query fails for any reason but missing topic authorization,
+      *                             wait this long, then query the leader again and retry
       * @param leaderFailureMaxAttempts  Maximum attempts to query the offsets, then this fails with the last failure
       * @tparam F
       */
@@ -739,9 +739,6 @@ object KafkaClient {
           .compile.toVector
         )
         .map { responses => (leader, responses) }
-        .onError { case failure =>
-          Logger[F].warn(s"Failed to query offsets for $topicId[$partition] at leader $leader, retrying in $leaderFailureTimeout", failure)
-        }
       }
 
       def extractOffsetRange(leaderResponses: (BrokerAddress, Vector[OffsetResponse])): F[(Long @@ Offset, Long @@ Offset)] = {
@@ -761,8 +758,15 @@ object KafkaClient {
 
       findLeader
       .flatMap(queryLeader)
-      .retry(leaderFailureTimeout, leaderFailureMaxAttempts)(!_.isInstanceOf[LeaderNotAvailable])
       .flatMap(extractOffsetRange)
+      .onError { case failure =>
+        Logger[F].warn(s"Failed to query offsets for $topicId[$partition], retrying in $leaderFailureTimeout", failure)
+      }
+      .retry(leaderFailureTimeout, leaderFailureMaxAttempts) {
+        // same as the official Java consumer: everything but missing access rights may be transient
+        case BrokerReportedFailure(_, _, ErrorType.TOPIC_AUTHORIZATION_FAILED) => false
+        case _ => true
+      }
     }
 
 
