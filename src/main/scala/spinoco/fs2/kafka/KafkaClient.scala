@@ -70,8 +70,8 @@ sealed trait KafkaClient[F[_]] {
     , minChunkByteSize: Int = 1
     , maxChunkByteSize: Int = 1024 * 1024
     , maxWaitTime: FiniteDuration = 1.minute
-    , leaderFailureTimeout: FiniteDuration = KafkaClient.DefaultLeaderFailureTimeout
-    , leaderFailureMaxAttempts: Int = KafkaClient.DefaultLeaderFailureMaxAttempts
+    , leaderFailureTimeout: FiniteDuration = 3.seconds
+    , leaderFailureMaxAttempts: Int = 20
   ): Stream[F, TopicMessage]
 
 
@@ -196,12 +196,6 @@ object KafkaClient {
 
   @inline def apply[F[_]](implicit instance: KafkaClient[F]): KafkaClient[F] = instance
 
-  /** Default period between attempts to recover from failure of a partition leader **/
-  val DefaultLeaderFailureTimeout: FiniteDuration = 3.seconds
-
-  /** Default number of attempts to recover from failure of a partition leader **/
-  val DefaultLeaderFailureMaxAttempts: Int = 20
-
   /**
    * Initially client spawns connections to nodes specified in ensemble and queries them for the topology.
    * After topology is known, it then initiates connection to each Kafka Broker listed in topology.
@@ -242,6 +236,8 @@ object KafkaClient {
     * @param brokerMetadataReadTimeout Maximum time we can take to read response from broker to a metadata request.
     * @param publishFailMaxAttempts   Max number of attempts when publish to a topic fails, this is usually caused
     *                                 by kafka leader change.
+    * @param queryOffsetRetryDelay    When query for partition offsets fails, wait this long before querying the leader again.
+    * @param queryOffsetMaxAttempts   Max number of attempts to query partition offsets, then this fails with the last failure.
     *
     */
   def mk[F[_] : Logger : Async : Network](
@@ -252,6 +248,8 @@ object KafkaClient {
     , getLeaderDelay: FiniteDuration = 3.seconds
     , brokerMetadataReadTimeout: Option[FiniteDuration] = Some(10.seconds)
     , publishFailMaxAttempts: Int = 3
+    , queryOffsetRetryDelay: FiniteDuration = 3.seconds
+    , queryOffsetMaxAttempts: Int = 20
   ): Resource[F,KafkaClient[F]] = {
 
     def brokerConnection(addr: BrokerAddress, readTimeout: Option[FiniteDuration]):Pipe[F,RequestMessage,ResponseMessage] = s =>
@@ -284,6 +282,8 @@ object KafkaClient {
       , offsetConnection =  impl.offsetConnection(brokerConnection(_, Some(queryOffsetTimeout)), protocol, s"$clientName-offset")
       , metaRequestConnection = impl.metadataConnection(brokerConnection(_, brokerMetadataReadTimeout), protocol, s"$clientName-meta")
       , queryOffsetTimeout = queryOffsetTimeout
+      , queryOffsetRetryDelay = queryOffsetRetryDelay
+      , queryOffsetMaxAttempts = queryOffsetMaxAttempts
       , protocol = protocol
     ))({ case (_, shutdown) => shutdown }).map(_._1)
   }
@@ -318,6 +318,8 @@ object KafkaClient {
       , offsetConnection : BrokerAddress => Pipe[F, OffsetsRequest, OffsetResponse]
       , metaRequestConnection: BrokerAddress => Pipe[F, MetadataRequest, MetadataResponse]
       , queryOffsetTimeout: FiniteDuration
+      , queryOffsetRetryDelay: FiniteDuration
+      , queryOffsetMaxAttempts: Int
       , protocol: ProtocolVersion.Value
     ): F[(KafkaClient[F], F[Unit])] =  {
       mkPublishers(publishConnection) map { publisher =>
@@ -326,8 +328,8 @@ object KafkaClient {
           getLeader = impl.leaderFor(fetchMetadata, ensemble.toSeq)
           , brokerOffsetConnection = offsetConnection
           , maxTimeForQuery = queryOffsetTimeout
-          , leaderFailureTimeout = DefaultLeaderFailureTimeout
-          , leaderFailureMaxAttempts = DefaultLeaderFailureMaxAttempts
+          , leaderFailureTimeout = queryOffsetRetryDelay
+          , leaderFailureMaxAttempts = queryOffsetMaxAttempts
         ) _
 
         def preparePublishMessages(messages: Chunk[(ByteVector, ByteVector)], compress: Option[Compression.Value]) = {
