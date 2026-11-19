@@ -559,7 +559,7 @@ object KafkaClient {
                 Stream.sleep(leaderFailureTimeout) >>
                 Stream.eval(getLeader(topicId, partition)) flatMap {
                   case None => tryRecover(LeaderNotAvailable(topicId, partition))
-                  case Some(leader) => fetchFromBroker(leader)
+                  case Some(leader) => Stream.eval(startFromRef.update { case (start, _) => (start, 0) }) >> fetchFromBroker(leader)
                 }
 
               }
