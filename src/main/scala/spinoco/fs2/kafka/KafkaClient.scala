@@ -15,6 +15,7 @@ import shapeless.{Typeable, tag}
 import spinoco.fs2.kafka.KafkaClient.impl.PartitionPublishConnection
 import spinoco.fs2.kafka.failure._
 import spinoco.fs2.kafka.network.{BrokerAddress, BrokerConnection}
+import spinoco.fs2.kafka.util.Retry.syntax._
 import spinoco.protocol.kafka.Message.SingleMessage
 import spinoco.protocol.kafka.Request._
 import spinoco.protocol.kafka.Response._
@@ -235,6 +236,8 @@ object KafkaClient {
     * @param brokerMetadataReadTimeout Maximum time we can take to read response from broker to a metadata request.
     * @param publishFailMaxAttempts   Max number of attempts when publish to a topic fails, this is usually caused
     *                                 by kafka leader change.
+    * @param queryOffsetRetryDelay    When query for partition offsets fails, wait this long before querying the leader again.
+    * @param queryOffsetMaxAttempts   Max number of attempts to query partition offsets, then this fails with the last failure.
     *
     */
   def mk[F[_] : Logger : Async : Network](
@@ -245,6 +248,8 @@ object KafkaClient {
     , getLeaderDelay: FiniteDuration = 3.seconds
     , brokerMetadataReadTimeout: Option[FiniteDuration] = Some(10.seconds)
     , publishFailMaxAttempts: Int = 3
+    , queryOffsetRetryDelay: FiniteDuration = 3.seconds
+    , queryOffsetMaxAttempts: Int = 20
   ): Resource[F,KafkaClient[F]] = {
 
     def brokerConnection(addr: BrokerAddress, readTimeout: Option[FiniteDuration]):Pipe[F,RequestMessage,ResponseMessage] = s =>
@@ -277,6 +282,8 @@ object KafkaClient {
       , offsetConnection =  impl.offsetConnection(brokerConnection(_, Some(queryOffsetTimeout)), protocol, s"$clientName-offset")
       , metaRequestConnection = impl.metadataConnection(brokerConnection(_, brokerMetadataReadTimeout), protocol, s"$clientName-meta")
       , queryOffsetTimeout = queryOffsetTimeout
+      , queryOffsetRetryDelay = queryOffsetRetryDelay
+      , queryOffsetMaxAttempts = queryOffsetMaxAttempts
       , protocol = protocol
     ))({ case (_, shutdown) => shutdown }).map(_._1)
   }
@@ -311,11 +318,19 @@ object KafkaClient {
       , offsetConnection : BrokerAddress => Pipe[F, OffsetsRequest, OffsetResponse]
       , metaRequestConnection: BrokerAddress => Pipe[F, MetadataRequest, MetadataResponse]
       , queryOffsetTimeout: FiniteDuration
+      , queryOffsetRetryDelay: FiniteDuration
+      , queryOffsetMaxAttempts: Int
       , protocol: ProtocolVersion.Value
     ): F[(KafkaClient[F], F[Unit])] =  {
       mkPublishers(publishConnection) map { publisher =>
 
-        val queryOffsetRange = impl.queryOffsetRange(impl.leaderFor(fetchMetadata, ensemble.toSeq), offsetConnection, queryOffsetTimeout) _
+        val queryOffsetRange = impl.queryOffsetRange(
+          getLeader = impl.leaderFor(fetchMetadata, ensemble.toSeq)
+          , brokerOffsetConnection = offsetConnection
+          , maxTimeForQuery = queryOffsetTimeout
+          , leaderFailureTimeout = queryOffsetRetryDelay
+          , leaderFailureMaxAttempts = queryOffsetMaxAttempts
+        ) _
 
         def preparePublishMessages(messages: Chunk[(ByteVector, ByteVector)], compress: Option[Compression.Value]) = {
           val singleMessages =  messages.map { case (k, v) => Message.SingleMessage(0, MessageVersion.V0, None, k , v) }
@@ -445,7 +460,6 @@ object KafkaClient {
 
 
     val consumerBrokerId = tag[Broker](-1)
-
 
     /**
       * Augments connection to broker to FetchRequest/FetchResponse pattern.
@@ -695,38 +709,65 @@ object KafkaClient {
       * @param partition            Id of the partition
       * @param getLeader            Queries leader for the partition supplied
       * @param brokerOffsetConnection     A function to create connection to broker to send // receive OffsetRequests
+      * @param leaderFailureTimeout When the query fails for any reason but missing topic authorization,
+      *                             wait this long, then query the leader again and retry
+      * @param leaderFailureMaxAttempts  Maximum attempts to query the offsets, then this fails with the last failure
       * @tparam F
       */
-    def queryOffsetRange[F[_] : Async](
+    def queryOffsetRange[F[_] : Async : Logger](
      getLeader: (String @@ TopicName, Int @@ PartitionId) => F[Option[BrokerAddress]]
       , brokerOffsetConnection : BrokerAddress => Pipe[F, OffsetsRequest, OffsetResponse]
       , maxTimeForQuery: FiniteDuration
+      , leaderFailureTimeout: FiniteDuration
+      , leaderFailureMaxAttempts: Int
     )(
       topicId: String @@ TopicName
       , partition: Int @@ PartitionId
     ): F[(Long @@ Offset, Long @@ Offset)] = {
-      getLeader(topicId, partition) flatMap {
-        case None => Sync[F].raiseError(LeaderNotAvailable(topicId, partition))
-        case Some(broker) =>
-          val requestOffsetDataMin = OffsetsRequest(consumerBrokerId, Vector((topicId, Vector((partition, new Date(-1), Some(Int.MaxValue))))))
-          val requestOffsetDataMax = OffsetsRequest(consumerBrokerId, Vector((topicId, Vector((partition, new Date(-2), Some(Int.MaxValue))))))
-          (((
-              Stream(requestOffsetDataMin, requestOffsetDataMax)
-                ++ Stream.sleep_(maxTimeForQuery) // assure stream won't complete before either response is received or timeout
-              ) through brokerOffsetConnection(broker)
-            )
-            .take(2)
-            .compile.toVector
-            ) flatMap { responses =>
-            val results = responses.flatMap(_.data.filter(_._1 == topicId).flatMap(_._2.find(_.partitionId == partition)))
-            results.collectFirst(Function.unlift(_.error)) match {
-              case Some(err) => Sync[F].raiseError(BrokerReportedFailure(broker, requestOffsetDataMin, err))
-              case None =>
-                val offsets = results.flatMap { _.offsets } map { o => (o: Long) }
-                if (offsets.isEmpty) Sync[F].raiseError(new Throwable(s"Invalid response. No offsets available: $responses, min: $requestOffsetDataMin, max: $requestOffsetDataMax"))
-                else Applicative[F].pure ((offset(offsets.min), offset(offsets.max)))
-            }
-          }
+      val requestOffsetDataMin = OffsetsRequest(consumerBrokerId, Vector((topicId, Vector((partition, new Date(-1), Some(Int.MaxValue))))))
+      val requestOffsetDataMax = OffsetsRequest(consumerBrokerId, Vector((topicId, Vector((partition, new Date(-2), Some(Int.MaxValue))))))
+
+      val findLeader: F[BrokerAddress] = {
+        getLeader(topicId, partition).flatMap(_.liftTo[F](LeaderNotAvailable(topicId, partition)))
+      }
+
+      def queryLeader(leader: BrokerAddress): F[(BrokerAddress, Vector[OffsetResponse])] = {
+        (((
+            Stream(requestOffsetDataMin, requestOffsetDataMax)
+              ++ Stream.sleep_(maxTimeForQuery) // assure stream won't complete before either response is received or timeout
+            ) through brokerOffsetConnection(leader)
+          )
+          .take(2)
+          .compile.toVector
+        )
+        .map { responses => (leader, responses) }
+      }
+
+      def extractOffsetRange(leaderResponses: (BrokerAddress, Vector[OffsetResponse])): F[(Long @@ Offset, Long @@ Offset)] = {
+        val (leader, responses) = leaderResponses
+        // results for our topic and partition
+        val results = responses.flatMap(_.data.filter(_._1 == topicId).flatMap(_._2.find(_.partitionId == partition)))
+        // first error reported by the broker in any of the responses, if any
+        results.collectFirst(Function.unlift(_.error)) match {
+          case Some(err) => Sync[F].raiseError(BrokerReportedFailure(leader, requestOffsetDataMin, err))
+          case None =>
+            // head is the smallest offset returned, tail the largest one; none means no usable answer, e.g. no reply within `maxTimeForQuery`
+            val offsets = results.flatMap { _.offsets } map { o => (o: Long) }
+            if (offsets.isEmpty) Sync[F].raiseError(new Throwable(s"Invalid response. No offsets available: $responses, min: $requestOffsetDataMin, max: $requestOffsetDataMax"))
+            else Applicative[F].pure ((offset(offsets.min), offset(offsets.max)))
+        }
+      }
+
+      findLeader
+      .flatMap(queryLeader)
+      .flatMap(extractOffsetRange)
+      .onError { case failure =>
+        Logger[F].warn(s"Failed to query offsets for $topicId[$partition], retrying in $leaderFailureTimeout", failure)
+      }
+      .retry(leaderFailureTimeout, leaderFailureMaxAttempts) {
+        // same as the official Java consumer: everything but missing access rights may be transient
+        case BrokerReportedFailure(_, _, ErrorType.TOPIC_AUTHORIZATION_FAILED) => false
+        case _ => true
       }
     }
 
